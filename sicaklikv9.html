@@ -1060,7 +1060,7 @@ async function doExportGrafikPDF(){
 
     // Geçici canvas oluştur ve grafik çiz
     var canvas = document.createElement('canvas');
-    canvas.width = 1800; canvas.height = 700;
+    canvas.width = 900; canvas.height = 350;
     document.body.appendChild(canvas);
 
     var labels = tag.measurements.map(function(m){ return m.date.slice(0,5)+' '+m.time; });
