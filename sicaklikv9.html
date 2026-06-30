@@ -1060,7 +1060,7 @@ async function doExportGrafikPDF(){
 
     // Geçici canvas oluştur ve grafik çiz
     var canvas = document.createElement('canvas');
-    canvas.width = 900; canvas.height = 350;
+    canvas.width = 600; canvas.height = 240;
     document.body.appendChild(canvas);
 
     var labels = tag.measurements.map(function(m){ return m.date.slice(0,5)+' '+m.time; });
@@ -1094,8 +1094,8 @@ async function doExportGrafikPDF(){
 
     // Canvas'ı bekle ve PDF'e ekle
     await new Promise(function(res){ setTimeout(res,200); });
-    var imgData = canvas.toDataURL('image/png');
-    doc.addImage(imgData,'PNG',14,40,182,71);
+    var imgData = canvas.toDataURL('image/jpeg', 0.7);
+    doc.addImage(imgData,'JPEG',14,40,182,71);
 
     // Grafiği temizle
     tmpChart.destroy();
