@@ -1094,7 +1094,7 @@ async function doExportGrafikPDF(){
 
     // Canvas'ı bekle ve PDF'e ekle
     await new Promise(function(res){ setTimeout(res,200); });
-    var imgData = canvas.toDataURL('image/jpeg', 0.7);
+    var imgData = canvas.toDataURL('image/jpeg', 1);
     doc.addImage(imgData,'JPEG',14,40,182,71);
 
     // Grafiği temizle
