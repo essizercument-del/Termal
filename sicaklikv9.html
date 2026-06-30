@@ -399,15 +399,57 @@ var FB_CONFIG = {
   appId: "1:872372545407:web:02ad89a88d29ea69d8dc4a"
 };
 
+function getUrlParams(){
+  var p = new URLSearchParams(window.location.search);
+  return { unite: p.get('unite'), tag: p.get('tag') };
+}
+
 function tryAutoConnect(){
   if(typeof firebase==='undefined'){ setTimeout(tryAutoConnect,500); return; }
   try{
     if(firebase.apps&&firebase.apps.length>0){ firebaseDB=firebase.apps[0].database(); }
     else { firebase.initializeApp(FB_CONFIG); firebaseDB=firebase.database(); }
     cloudStatus='connected'; updateCloudDot();
+    var urlP = getUrlParams();
+    if(urlP.unite){
+      // URL'den unite belirtilmis - direkt o uniteyi yukle, sonra tag varsa ac
+      uniteYukleVeTagAc(urlP.unite, urlP.tag);
+      return;
+    }
     var sonUnite=localStorage.getItem('termal_son_unite');
     if(sonUnite){ uniteYukle(sonUnite); } else { uniteSecimGoster(); }
   } catch(e){ cloudStatus='disconnected'; updateCloudDot(); checkSetup(); }
+}
+
+function uniteYukleVeTagAc(uniteAdi, tagAdi){
+  AKTIF_UNITE=fbSafe(uniteAdi);
+  localStorage.setItem('termal_son_unite',AKTIF_UNITE);
+  firebaseDB.ref('termal/'+AKTIF_UNITE).once('value').then(function(snap){
+    try{
+      var data=snap.val();
+      if(!data){ DB.unitName=uniteAdi; DB.tags=[]; dbSave(); }
+      else{
+        delete data.lastSync;
+        if(data.tags&&!Array.isArray(data.tags)) data.tags=Object.values(data.tags);
+        if(!data.tags) data.tags=[];
+        data.tags.forEach(function(tag){
+          if(tag.measurements&&!Array.isArray(tag.measurements)) tag.measurements=Object.values(tag.measurements);
+          if(!tag.measurements) tag.measurements=[];
+        });
+        DB=data; dbSave();
+      }
+      document.getElementById('unitBadgeEl').textContent=DB.unitName||uniteAdi;
+      checkSetup();
+      if(tagAdi && getTag(tagAdi)){
+        navigate('tag_detail',{tag:tagAdi},false);
+      } else if(tagAdi){
+        showToast('Tag bulunamadi: '+tagAdi,'warn');
+        navigate('home',{},false);
+      } else {
+        navigate('home',{},false);
+      }
+    } catch(e){ showToast('Hata: '+e.message,'error'); }
+  }).catch(function(e){ showToast('Hata: '+e.message,'error'); });
 }
 
 function uniteSecimGoster(){
