@@ -144,17 +144,18 @@ html,body{background:var(--bg);color:var(--text);font-family:var(--mono);font-si
 .qr-hint{color:#fff;font-size:12px;margin-top:18px;letter-spacing:1px;text-align:center}
 .qr-close-btn{position:absolute;top:48px;right:16px;pointer-events:all;background:rgba(0,0,0,0.6);border:1px solid rgba(255,255,255,0.2);color:#fff;border-radius:5px;padding:7px 14px;font-size:12px;cursor:pointer}
 /* UNİTE SEÇİM */
-#uniteSecimEkrani{display:none;position:fixed;inset:0;z-index:300;background:var(--bg);flex-direction:column;align-items:center;justify-content:flex-start;padding:24px;overflow-y:auto}#uniteSecimEkrani.open{display:flex}
+#uniteSecimEkrani{display:none;position:fixed;inset:0;z-index:300;background:var(--bg);flex-direction:column;align-items:center;justify-content:flex-start;padding:24px;overflow-y:auto}
+#uniteSecimEkrani.open{display:flex}
 .unite-secim-baslik{font-size:20px;font-weight:700;margin-bottom:6px;color:var(--text)}
 .unite-secim-alt{font-size:12px;color:var(--text-dim);margin-bottom:24px;text-align:center}
 .unite-list{width:100%;max-width:360px;margin-bottom:16px}
-.unite-secim-item{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:14px 16px;margin-bottom:8px;cursor:pointer;font-size:14px;font-weight:600;text-align:center;color:var(--text)}
+.unite-secim-item{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:14px 16px;margin-bottom:8px;font-size:14px;font-weight:600;text-align:center;color:var(--text)}
 .unite-secim-item:active{border-color:var(--accent)}
-.unite-secim-yeni{background:transparent;border:1px dashed var(--accent);color:var(--accent)}
-.unite-secim-row{display:flex;align-items:center;gap:8px;text-align:left}
-.unite-secim-row .usi-name{flex:1;text-align:center}
-.usi-edit-btn{flex-shrink:0;background:transparent;border:1px solid var(--border);border-radius:5px;color:var(--text-dim);padding:5px 9px;font-size:13px;cursor:pointer;line-height:1}
-.usi-edit-btn:active{border-color:var(--accent);color:var(--accent)}
+.unite-secim-yeni{background:transparent;border:1px dashed var(--accent);color:var(--accent);cursor:pointer}
+.unite-secim-row{display:flex;align-items:center;gap:8px;text-align:left;padding:8px 8px 8px 16px}
+.unite-secim-row .usi-name{flex:1;text-align:center;cursor:pointer;padding:10px 4px}
+.usi-edit-btn{flex-shrink:0;background:transparent;border:1px solid var(--border);border-radius:6px;color:var(--text-dim);padding:9px 12px;font-size:15px;cursor:pointer;line-height:1;min-width:42px;min-height:42px;display:flex;align-items:center;justify-content:center}
+.usi-edit-btn:active{border-color:var(--accent);color:var(--accent);background:rgba(0,212,255,.08)}
 /* INSTALL BANNER */
 #installBanner{display:none;position:fixed;bottom:72px;left:12px;right:12px;z-index:500;background:#1a2235;border:1px solid var(--accent);border-radius:10px;padding:10px 14px;align-items:center;gap:10px;box-shadow:0 4px 20px rgba(0,0,0,0.5)}
 #installBanner span{flex:1;font-size:12px;color:var(--text)}
@@ -463,11 +464,11 @@ function uniteSecimGoster(){
     var el=document.getElementById('uniteListEl');
     var html='';
     uniteler.forEach(function(u){
-  html+='<div class="unite-secim-item unite-secim-row">'+
-    '<span class="usi-name" onclick="uniteYukle(\''+u+'\')">'+u+'</span>'+
-    '<button type="button" class="usi-edit-btn" onclick="event.stopPropagation();editUniteAdi(\''+u+'\')">&#9998;</button>'+
-    '</div>';
-});
+      html+='<div class="unite-secim-item unite-secim-row">'+
+        '<span class="usi-name" onclick="uniteYukle(\''+u+'\')">'+u+'</span>'+
+        '<button type="button" class="usi-edit-btn" onclick="editUniteAdi(event,\''+u+'\')">&#9998;</button>'+
+        '</div>';
+    });
     html+='<div class="unite-secim-item unite-secim-yeni" onclick="yeniUniteOlustur()">+ Yeni Unite Olustur</div>';
     el.innerHTML=html;
     document.getElementById('uniteSecimEkrani').classList.add('open');
@@ -528,7 +529,8 @@ function yeniUniteKaydet(){
   checkSetup();
   navigate('home',{},false);
 }
-function editUniteAdi(oldName){
+function editUniteAdi(e,oldName){
+  if(e){ e.stopPropagation(); e.preventDefault(); }
   showModal('<div class="modal-title">Unite Adini Duzenle</div>'+
     '<div class="form-group"><label class="form-label">Yeni Ad</label>'+
     '<input type="text" class="form-input" id="editUniteAdiIn" value="'+oldName+'" maxlength="30"></div>'+
@@ -566,7 +568,7 @@ function doEditUniteAdi(oldName){
       }).catch(function(e){ showToast('Hata: '+e.message,'error'); });
     }).catch(function(e){ showToast('Hata: '+e.message,'error'); });
   }).catch(function(e){ showToast('Hata: '+e.message,'error'); });
-}  
+}
 function initFirebase(config){ pushToCloud(); }
 function pushToCloud(){
   if(!AKTIF_UNITE) AKTIF_UNITE = localStorage.getItem('termal_son_unite');
