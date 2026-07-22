@@ -151,6 +151,10 @@ html,body{background:var(--bg);color:var(--text);font-family:var(--mono);font-si
 .unite-secim-item{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:14px 16px;margin-bottom:8px;cursor:pointer;font-size:14px;font-weight:600;text-align:center;color:var(--text)}
 .unite-secim-item:active{border-color:var(--accent)}
 .unite-secim-yeni{background:transparent;border:1px dashed var(--accent);color:var(--accent)}
+.unite-secim-row{display:flex;align-items:center;gap:8px;text-align:left}
+.unite-secim-row .usi-name{flex:1;text-align:center}
+.usi-edit-btn{flex-shrink:0;background:transparent;border:1px solid var(--border);border-radius:5px;color:var(--text-dim);padding:5px 9px;font-size:13px;cursor:pointer;line-height:1}
+.usi-edit-btn:active{border-color:var(--accent);color:var(--accent)}
 /* INSTALL BANNER */
 #installBanner{display:none;position:fixed;bottom:72px;left:12px;right:12px;z-index:500;background:#1a2235;border:1px solid var(--accent);border-radius:10px;padding:10px 14px;align-items:center;gap:10px;box-shadow:0 4px 20px rgba(0,0,0,0.5)}
 #installBanner span{flex:1;font-size:12px;color:var(--text)}
@@ -459,8 +463,11 @@ function uniteSecimGoster(){
     var el=document.getElementById('uniteListEl');
     var html='';
     uniteler.forEach(function(u){
-      html+='<div class="unite-secim-item" onclick="uniteYukle(\''+u+'\')">'+u+'</div>';
-    });
+  html+='<div class="unite-secim-item unite-secim-row">'+
+    '<span class="usi-name" onclick="uniteYukle(\''+u+'\')">'+u+'</span>'+
+    '<button type="button" class="usi-edit-btn" onclick="event.stopPropagation();editUniteAdi(\''+u+'\')">&#9998;</button>'+
+    '</div>';
+});
     html+='<div class="unite-secim-item unite-secim-yeni" onclick="yeniUniteOlustur()">+ Yeni Unite Olustur</div>';
     el.innerHTML=html;
     document.getElementById('uniteSecimEkrani').classList.add('open');
@@ -521,6 +528,45 @@ function yeniUniteKaydet(){
   checkSetup();
   navigate('home',{},false);
 }
+function editUniteAdi(oldName){
+  showModal('<div class="modal-title">Unite Adini Duzenle</div>'+
+    '<div class="form-group"><label class="form-label">Yeni Ad</label>'+
+    '<input type="text" class="form-input" id="editUniteAdiIn" value="'+oldName+'" maxlength="30"></div>'+
+    '<div class="modal-actions"><button class="btn btn-primary" onclick="doEditUniteAdi(\''+oldName+'\')">Kaydet</button>'+
+    '<button class="btn btn-ghost" onclick="closeModal()">Iptal</button></div>');
+  setTimeout(function(){ var el=document.getElementById('editUniteAdiIn'); if(el){ el.focus(); el.select(); } },150);
+}
+
+function doEditUniteAdi(oldName){
+  var input=document.getElementById('editUniteAdiIn');
+  var yeniAdRaw=input?input.value.trim():'';
+  if(!yeniAdRaw){ showToast('Unite adi bos olamaz','error'); return; }
+  var yeniSafe=fbSafe(yeniAdRaw);
+  if(yeniSafe===oldName){ closeModal(); return; }
+  if(!firebaseDB){ showToast('Bulut baglantisi yok','error'); return; }
+  showToast('Guncelleniyor...','warn');
+  firebaseDB.ref('termal/'+yeniSafe).once('value').then(function(checkSnap){
+    if(checkSnap.exists()){ showToast('Bu isimde bir unite zaten var','error'); return; }
+    firebaseDB.ref('termal/'+oldName).once('value').then(function(snap){
+      var data=snap.val();
+      if(!data){ showToast('Unite verisi bulunamadi','error'); return; }
+      data.unitName=yeniAdRaw;
+      firebaseDB.ref('termal/'+yeniSafe).set(data).then(function(){
+        return firebaseDB.ref('termal/'+oldName).remove();
+      }).then(function(){
+        if(AKTIF_UNITE===oldName){
+          AKTIF_UNITE=yeniSafe;
+          localStorage.setItem('termal_son_unite',yeniSafe);
+          DB.unitName=yeniAdRaw; dbSave();
+          var badgeEl=document.getElementById('unitBadgeEl'); if(badgeEl) badgeEl.textContent=yeniAdRaw;
+        }
+        closeModal();
+        showToast('Unite adi guncellendi: '+yeniAdRaw,'success');
+        uniteSecimGoster();
+      }).catch(function(e){ showToast('Hata: '+e.message,'error'); });
+    }).catch(function(e){ showToast('Hata: '+e.message,'error'); });
+  }).catch(function(e){ showToast('Hata: '+e.message,'error'); });
+}  
 function initFirebase(config){ pushToCloud(); }
 function pushToCloud(){
   if(!AKTIF_UNITE) AKTIF_UNITE = localStorage.getItem('termal_son_unite');
