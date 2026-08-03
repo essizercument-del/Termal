@@ -160,9 +160,31 @@ html,body{background:var(--bg);color:var(--text);font-family:var(--mono);font-si
 #installBanner{display:none;position:fixed;bottom:72px;left:12px;right:12px;z-index:500;background:#1a2235;border:1px solid var(--accent);border-radius:10px;padding:10px 14px;align-items:center;gap:10px;box-shadow:0 4px 20px rgba(0,0,0,0.5)}
 #installBanner span{flex:1;font-size:12px;color:var(--text)}
 #installBanner button{font-size:11px;padding:5px 10px;white-space:nowrap}
+/* LOGIN */
+#loginScreen{display:none;position:fixed;inset:0;z-index:900;background:var(--bg);align-items:center;justify-content:center;flex-direction:column;gap:22px;padding:30px}
+#loginScreen.open{display:flex}
+.login-error{font-size:11px;color:var(--red);min-height:16px;margin-top:6px;text-align:center}
 </style>
 </head>
 <body>
+
+<!-- LOGIN -->
+<div id="loginScreen">
+  <div class="setup-logo">TERMAL<span>TAKİP</span></div>
+  <p class="setup-sub">Devam etmek icin giris yapin.</p>
+  <div class="setup-box">
+    <div class="form-group">
+      <label class="form-label">E-posta</label>
+      <input type="email" class="form-input" id="loginEmail" placeholder="ornek@termaltakip.local" autocomplete="username" onkeydown="if(event.key==='Enter')document.getElementById('loginPassword').focus()">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Sifre</label>
+      <input type="password" class="form-input" id="loginPassword" placeholder="••••••••" autocomplete="current-password" onkeydown="if(event.key==='Enter')doLogin()">
+    </div>
+    <button class="btn btn-primary btn-full" id="loginBtn" onclick="doLogin()">Giris Yap</button>
+    <div class="login-error" id="loginError"></div>
+  </div>
+</div>
 
 <!-- SETUP -->
 <div id="setupScreen">
@@ -200,6 +222,7 @@ html,body{background:var(--bg);color:var(--text);font-family:var(--mono);font-si
   <button class="btn btn-ghost btn-sm" onclick="uniteSecimGoster()" style="padding:4px 8px;font-size:11px">&#8646; Degistir</button>
   <button class="btn btn-ghost btn-sm" onclick="qrAc()" style="padding:4px 8px;font-size:11px">&#9638; QR</button>
   <div class="cloud-dot" id="cloudDot" onclick="navigate('yedek')" title="Bulut durumu"></div>
+  <button class="btn btn-ghost btn-sm" onclick="confirmLogout()" style="padding:4px 8px;font-size:11px" title="Cikis yap">&#9211;</button>
   <div class="clock" id="clockEl"></div>
 </div>
 
@@ -392,6 +415,7 @@ function fbSafe(str){
 var firebaseDB = null;
 var cloudStatus = 'disconnected';
 var AKTIF_UNITE = null;
+var currentUser = null;
 
 var FB_CONFIG = {
   apiKey: "AIzaSyA7WxFYfUjwHER_WjUBw_RVgzU_IT84NlU",
@@ -1256,7 +1280,11 @@ function renderYedek(){
   var isConn=cloudStatus==='connected';
   var tagBtns=DB.tags.map(function(t){ return '<button class="btn btn-ghost btn-sm" onclick="exportTag(\''+t.name+'\')">'+t.name+'</button>'; }).join('')||'<span style="color:var(--text-dim);font-size:11px">Tag yok</span>';
   var today=new Date().toISOString().slice(0,10);
-  return '<div class="card"><div class="card-head"><div class="dot"></div>Veri Ozeti</div>'+
+  var accEmail=currentUser&&currentUser.email?currentUser.email:'-';
+  return '<div class="card"><div class="card-head"><div class="dot"></div>Hesap</div>'+
+    '<div style="font-size:12px;color:var(--text-mid);margin-bottom:10px">Giris yapan: <b style="color:var(--text)">'+accEmail+'</b></div>'+
+    '<button class="btn btn-danger btn-full" onclick="confirmLogout()">&#9211; Cikis Yap</button></div>'+
+    '<div class="card"><div class="card-head"><div class="dot"></div>Veri Ozeti</div>'+
     '<div class="stat-row"><div class="stat-box"><div class="stat-val" style="font-size:14px">'+(DB.unitName||'-')+'</div><div class="stat-lbl">Unite</div></div><div class="stat-box"><div class="stat-val">'+DB.tags.length+'</div><div class="stat-lbl">Tag</div></div><div class="stat-box"><div class="stat-val">'+totalMeas+'</div><div class="stat-lbl">Olcum</div></div></div></div>'+
     '<div class="card"><div class="card-head"><div class="dot"></div>&#9729; Bulut (Firebase)</div>'+
     '<div style="display:flex;align-items:center;gap:10px;margin-bottom:12px"><span style="font-size:11px;color:'+(isConn?'var(--green)':'var(--text-dim)')+'">'+(isConn?'&#9679; BAGLI':'&#9675; BAGLI DEGIL')+'</span><button class="btn btn-ghost btn-sm" onclick="showFirebaseConfig()">&#9881; Ayarlar</button></div>'+
@@ -1461,11 +1489,67 @@ function qrKaydet(){
   window.hideInstallBanner=function(){ var el=document.getElementById('installBanner');if(el)el.style.display='none'; };
 })();
 
+// ─── AUTH ───
+function showLoginScreen(){
+  document.getElementById('loginScreen').classList.add('open');
+  document.getElementById('setupScreen').classList.remove('open');
+  document.getElementById('uniteSecimEkrani').classList.remove('open');
+  document.getElementById('topbar').style.display='none';
+  document.getElementById('bottomnav').style.display='none';
+  document.getElementById('content').style.display='none';
+}
+function hideLoginScreen(){
+  document.getElementById('loginScreen').classList.remove('open');
+  var errEl=document.getElementById('loginError'); if(errEl) errEl.textContent='';
+  var btn=document.getElementById('loginBtn'); if(btn){ btn.disabled=false; btn.textContent='Giris Yap'; }
+}
+function doLogin(){
+  var email=document.getElementById('loginEmail').value.trim();
+  var pass=document.getElementById('loginPassword').value;
+  var errEl=document.getElementById('loginError');
+  if(errEl) errEl.textContent='';
+  if(!email||!pass){ if(errEl) errEl.textContent='E-posta ve sifre girin'; return; }
+  var btn=document.getElementById('loginBtn');
+  if(btn){ btn.disabled=true; btn.textContent='Giris yapiliyor...'; }
+  firebase.auth().signInWithEmailAndPassword(email,pass)
+    .catch(function(e){
+      if(errEl) errEl.textContent='Giris basarisiz: e-posta veya sifre hatali';
+      if(btn){ btn.disabled=false; btn.textContent='Giris Yap'; }
+    });
+}
+function confirmLogout(){
+  showModal('<div class="modal-title">Cikis Yap</div>'+
+    '<p style="color:var(--text-mid);font-size:12px;margin-bottom:12px">Oturumu kapatmak istediginize emin misiniz?</p>'+
+    '<div class="modal-actions"><button class="btn btn-danger" onclick="doLogout()">Cikis Yap</button><button class="btn btn-ghost" onclick="closeModal()">Iptal</button></div>');
+}
+function doLogout(){
+  closeModal();
+  firebase.auth().signOut();
+}
+function initAuth(){
+  if(typeof firebase==='undefined'){ setTimeout(initAuth,300); return; }
+  try{
+    if(!(firebase.apps&&firebase.apps.length>0)){ firebase.initializeApp(FB_CONFIG); }
+    firebase.auth().setPersistence(firebase.auth.Auth.Persistence.LOCAL).catch(function(){}).then(function(){
+      firebase.auth().onAuthStateChanged(function(user){
+        if(user){
+          currentUser=user;
+          hideLoginScreen();
+          tryAutoConnect();
+          checkSetup();
+        } else {
+          currentUser=null;
+          showLoginScreen();
+        }
+      });
+    });
+  } catch(e){ setTimeout(initAuth,300); }
+}
+
 // ─── INIT ───
 window.addEventListener('popstate',function(){ goBack(); });
 history.pushState({},'');
-tryAutoConnect();
-checkSetup();
+initAuth();
 </script>
 </body>
 </html>
