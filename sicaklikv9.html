@@ -39,10 +39,11 @@ html,body{background:var(--bg);color:var(--text);font-family:var(--mono);font-si
 .cloud-dot.on{background:var(--green)}
 .clock{font-size:10px;color:var(--text-dim);white-space:nowrap}
 #content{padding:68px 12px 70px;max-width:600px;margin:0 auto}
-#bottomnav{position:fixed;bottom:0;left:0;right:0;z-index:100;height:60px;background:rgba(8,12,20,.97);border-top:1px solid var(--border);display:grid;grid-template-columns:repeat(5,1fr);backdrop-filter:blur(8px)}
+#bottomnav{position:fixed;bottom:0;left:0;right:0;z-index:100;height:60px;background:rgba(8,12,20,.97);border-top:1px solid var(--border);display:grid;grid-template-columns:repeat(6,1fr);backdrop-filter:blur(8px)}
 .nav-btn{background:none;border:none;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;color:var(--text-dim);font-family:var(--mono);font-size:8px;letter-spacing:.4px;transition:color .15s}
 .nav-btn svg{width:19px;height:19px}
 .nav-btn.active{color:var(--accent)}
+.nav-btn-logout{color:var(--red)!important}
 .card{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:10px}
 .card-head{font-family:var(--head);font-size:13px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:var(--text-mid);margin-bottom:12px;display:flex;align-items:center;gap:7px}
 .card-head .dot{width:6px;height:6px;border-radius:50%;background:var(--accent);flex-shrink:0}
@@ -135,6 +136,7 @@ html,body{background:var(--bg);color:var(--text);font-family:var(--mono);font-si
 ::-webkit-scrollbar{width:3px;height:3px}
 ::-webkit-scrollbar-thumb{background:var(--border);border-radius:4px}
 @media(max-width:360px){.home-grid{grid-template-columns:1fr}}
+@media(max-width:400px){.clock{display:none}#topbar{gap:5px;padding:0 8px}.unit-badge{max-width:70px}}
 /* QR SCANNER */
 #qrScanner{display:none;position:fixed;inset:0;z-index:400;background:#000;flex-direction:column}
 #qrScanner.open{display:flex}
@@ -223,7 +225,6 @@ html,body{background:var(--bg);color:var(--text);font-family:var(--mono);font-si
   <button class="btn btn-ghost btn-sm" onclick="uniteSecimGoster()" style="padding:4px 8px;font-size:11px">&#8646; Degistir</button>
   <button class="btn btn-ghost btn-sm" onclick="qrAc()" style="padding:4px 8px;font-size:11px">&#9638; QR</button>
   <div class="cloud-dot" id="cloudDot" onclick="navigate('yedek')" title="Bulut durumu"></div>
-  <button class="btn btn-ghost btn-sm" onclick="confirmLogout()" style="padding:4px 8px;font-size:11px" title="Cikis yap">&#9211;</button>
   <div class="clock" id="clockEl"></div>
 </div>
 
@@ -251,6 +252,10 @@ html,body{background:var(--bg);color:var(--text);font-family:var(--mono);font-si
   <button class="nav-btn" id="nav-yedek" onclick="navigate('yedek')">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><polyline points="8 17 12 21 16 17"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.88 18.09A5 5 0 0018 9h-1.26A8 8 0 103 16.29"/></svg>
     YEDEK
+  </button>
+  <button class="nav-btn nav-btn-logout" id="nav-cikis" onclick="confirmLogout()">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M18.36 6.64a9 9 0 11-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/></svg>
+    ÇIKIŞ
   </button>
 </div>
 
@@ -730,7 +735,17 @@ function renderHome(){
   var totalMeas=tags.reduce(function(s,t){ return s+t.measurements.length; },0);
   var alarmTags=tags.filter(function(t){ var l=lastTemp(t); return l!==null&&alarmStatus(l,t)!=='normal'; });
   var banner='';
-  if(alarmTags.length) banner='<div class="alarm-bar alarm-red"><span style="font-size:16px">&#128308;</span><span><b>'+alarmTags.length+'</b> tag alarm durumunda!</span></div>';
+  if(alarmTags.length){
+    var alarmList=alarmTags.map(function(t){
+      var l=lastTemp(t); var st=alarmStatus(l,t);
+      var icon=st==='red'?'&#128308;':'&#127937;';
+      return '<span onclick="navigate(\'tag_detail\',{tag:\''+t.name+'\'})" style="display:inline-flex;align-items:center;gap:4px;margin:0 10px 4px 0;cursor:pointer;text-decoration:underline;text-decoration-style:dotted">'+icon+' <b>'+t.name+'</b> ('+l+'&deg;C)</span>';
+    }).join('');
+    banner='<div class="alarm-bar alarm-red" style="flex-direction:column;align-items:flex-start;gap:6px">'+
+      '<div style="display:flex;align-items:center;gap:7px"><span style="font-size:16px">&#128308;</span><span><b>'+alarmTags.length+'</b> tag alarm durumunda!</span></div>'+
+      '<div style="font-size:11px;line-height:1.6">'+alarmList+'</div>'+
+      '</div>';
+  }
   var overdueTags=[];
   var tagRows=tags.map(function(t){
     var l=lastTemp(t); var st=l!==null?alarmStatus(l,t):'normal';
