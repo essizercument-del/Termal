@@ -1319,7 +1319,7 @@ function addAnalysisCriteriaSection(doc, startY, maxWidth){
   var items=[
     ['1) Mutlak Sicaklik','Son olcum, tag icin tanimli Sari/Kirmizi limitlerle karsilastirilir. Limit altindaysa Normal, Sari limiti gectiyse Uyari, Kirmizi limiti gectiyse Kritik.'],
     ['2) Delta T Egilimi','Delta T = Motor Sicakligi - Ortam Sicakligi (motorun ortamdan bagimsiz kendi isinmasi). Son olcumun Delta T degeri, onceki en fazla 5 olcumun Delta T ortalamasiyla karsilastirilir. Fark 5K veya daha fazlaysa "yukselis egilimi" olarak isaretlenir. Yeterli gecmis veri yoksa referans (baseline) olusturulur.'],
-    ['3) Saglik Skoru (0-100)','100 puandan baslar. Kirmizi durumda -50, Sari durumda -20 puan kirilir. Delta T yukselis egilimindeyse ayrica -20 puan kirilir. Bu ikisi disinda hicbir sey skoru etkilemez.'],
+    ['3) Saglik Skoru (0-100)','100 puandan baslar. Kirmizi durumda -50, Sari durumda -20 puan kirilir. Delta T yukselis egilimindeyse ayrica -40 puan kirilir. Bu ikisi disinda hicbir sey skoru etkilemez.'],
     ['Skora Dahil Olmayanlar','Olcumler arasi gecen gun sayisi (fabrika ortaminda duzensiz olcum araligi normal kabul edilir) ve sicaklik artis hizi (olcum araliklari tutarli olmadigindan) skoru etkilemez, sadece bilgi amaclidir.']
   ];
   items.forEach(function(it){
@@ -1432,7 +1432,7 @@ function calcHealthScore(tag){
   if(st==='red') score -= 50;
   else if(st==='yellow') score -= 20;
   var dt = calcDeltaTAnalysis(tag);
-  if(dt.status==='rising') score -= 20;
+  if(dt.status==='rising') score -= 40;
   return Math.max(0, Math.min(100, score));
 }
 function daysBetweenLastTwo(tag){
@@ -1502,7 +1502,7 @@ function showAnalysisInfo(){
     '<b style="color:var(--text)">2) Delta T Egilimi</b><br>'+
     'Delta T = Motor Sicakligi &minus; Ortam Sicakligi. Bu, motorun mevsim/ortamdan bagimsiz kendi isinmasini gosterir. Son olcumun Delta T degeri, onceki en fazla 5 olcumun Delta T ortalamasiyla karsilastirilir. Fark 5K veya daha fazlaysa "yukselis egilimi" olarak isaretlenir — motor, ortam sabit olsa bile normalden fazla isiniyor demektir. Yeterli gecmis veri yoksa referans (baseline) olusturulur, henuz karsilastirma yapilmaz.<br><br>'+
     '<b style="color:var(--text)">3) Saglik Skoru (0-100)</b><br>'+
-    '100 puandan baslar. Kirmizi durumda &minus;50, Sari durumda &minus;20 puan kirilir. Delta T yukselis egilimindeyse ayrica &minus;20 puan kirilir. Bu ikisi disinda hicbir sey skoru etkilemez.<br><br>'+
+    '100 puandan baslar. Kirmizi durumda &minus;50, Sari durumda &minus;20 puan kirilir. Delta T yukselis egilimindeyse ayrica &minus;40 puan kirilir. Bu ikisi disinda hicbir sey skoru etkilemez.<br><br>'+
     '<b style="color:var(--text)">Skora Dahil Olmayanlar</b><br>'+
     'Olcumler arasi gecen gun sayisi sadece bilgi amacli gosterilir, skoru etkilemez — fabrika ortaminda olcum araliklarinin duzensiz olmasi normal kabul edilir. Sicaklik artis hizi (derece/saat) da olcum araliklari tutarli olmadigi icin hesaba katilmaz.'+
     '</div>'+
