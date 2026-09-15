@@ -1080,7 +1080,8 @@ function renderRapor(ctx){
     '<div class="form-group"><label class="form-label">Kapsam</label><div class="select-wrap"><select class="form-select" id="raporTag" onchange="navigate(\'rapor\',{tag:this.value},false)">'+(tagOpts||'<option value="all">Tum Unite</option>')+'</select></div></div>'+
     '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px" class="form-group"><div><label class="form-label">Baslangic</label><input type="date" class="form-input" id="raporFrom"></div><div><label class="form-label">Bitis</label><input type="date" class="form-input" id="raporTo" value="'+today+'"></div></div>'+
     preview+'<div style="display:flex;gap:7px;margin-top:4px"><button class="btn btn-primary btn-full" onclick="doExportExcel()">&#128202; Excel</button><button class="btn btn-ghost btn-full" onclick="doExportPDF()">&#128196; PDF</button></div>'+
-    '<div style="margin-top:7px"><button class="btn btn-ghost btn-full" onclick="doExportGrafikPDF()" style="border-color:var(--accent);color:var(--accent)">&#128200; Grafik PDF</button></div></div>'+
+    '<div style="margin-top:7px"><button class="btn btn-ghost btn-full" onclick="doExportGrafikPDF()" style="border-color:var(--accent);color:var(--accent)">&#128200; Grafik PDF</button></div>'+
+    '<div style="margin-top:7px"><button class="btn btn-ghost btn-full" onclick="doExportAnalysisPDF()" style="border-color:var(--yellow);color:var(--yellow)">&#128300; Analiz PDF</button></div></div>'+
     '<div class="card" style="font-size:10px;color:var(--text-dim);line-height:1.9"><b style="color:var(--text-mid)">Dosya adi:</b><br><code style="color:var(--accent)">'+fileLabel+'.xlsx / .pdf</code><br>'+(selTag==='all'?'<span style="color:var(--text-mid)">Tum Unite secilince sadece ozet tablo &middot; Tag detayi icin tag secin</span>':'')+'</div>';
 }
 
@@ -1294,6 +1295,90 @@ function doExportPDF(){
   showToast('PDF: '+d.ms.length+' olcum indirildi','success');
 }
 
+function getTagAnalysisData(tag){
+  var l=lastTemp(tag); if(l===null) return null;
+  var last=tag.measurements[tag.measurements.length-1];
+  var st=alarmStatus(l,tag);
+  var stTxt=st==='red'?'KRITIK':st==='yellow'?'UYARI':'NORMAL';
+  var dt=calcDeltaTAnalysis(tag);
+  var score=calcHealthScore(tag);
+  var comment=analysisComment(st,dt);
+  var gapDays=daysBetweenLastTwo(tag);
+  return {tag:tag,tagName:tag.name,temp:l,ambient:last.ambient,st:st,stTxt:stTxt,dt:dt,score:score,comment:comment,gapDays:gapDays};
+}
+
+function doExportAnalysisPDF(){
+  if(typeof window.jspdf==='undefined'){ showToast('PDF kutuphanesi yuklenemedi','error'); return; }
+  var selTag=document.getElementById('raporTag')?document.getElementById('raporTag').value:'all';
+  var jsPDF=window.jspdf.jsPDF;
+  var date=new Date().toISOString().slice(0,10);
+  var dateStr=new Date().toLocaleString('tr-TR');
+
+  if(selTag==='all'){
+    var dataList=DB.tags.map(getTagAnalysisData).filter(Boolean);
+    if(!dataList.length){ showToast('Analiz icin olcum bulunamadi','warn'); return; }
+    var doc=new jsPDF({orientation:'landscape',unit:'mm',format:'a4'});
+    doc.setFontSize(15);doc.setTextColor(30,30,30);doc.text('TERMAL TAKIP - ANALIZ RAPORU  \u2014  '+DB.unitName,14,16);
+    doc.setFontSize(8);doc.setTextColor(100);doc.text('Kapsam: Tum Unite  |  Tag Sayisi: '+dataList.length+'  |  Olusturma: '+dateStr,14,23);
+    var body=dataList.map(function(d){
+      var dtCell = d.dt.status==='none' ? '-' : d.dt.status==='baseline' ? (d.dt.current+'K (referans)') : (d.dt.current+'K'+(d.dt.status==='rising'?' (yukselis)':''));
+      return [d.tagName, d.temp+'\u00b0C', (d.ambient!==null&&d.ambient!==undefined)?d.ambient+'\u00b0C':'-', dtCell, d.stTxt, String(d.score), d.comment];
+    });
+    doc.autoTable({
+      startY:28,
+      head:[['Tag','Sicaklik','Ortam','Delta T','Durum','Skor','Yorum']],
+      body:body,
+      styles:{fontSize:8,cellPadding:3,lineHeight:1.3},
+      headStyles:{fillColor:[0,136,187],textColor:255,fontSize:9},
+      alternateRowStyles:{fillColor:[248,250,254]},
+      columnStyles:{0:{cellWidth:22},1:{cellWidth:18},2:{cellWidth:18},3:{cellWidth:30},4:{cellWidth:18},5:{cellWidth:14},6:{cellWidth:'auto'}},
+      didParseCell:function(data){
+        if(data.column.index===4&&data.section==='body'){
+          if(data.cell.raw==='KRITIK') data.cell.styles.textColor=[200,30,40];
+          if(data.cell.raw==='UYARI') data.cell.styles.textColor=[160,110,0];
+          if(data.cell.raw==='NORMAL') data.cell.styles.textColor=[0,150,80];
+        }
+      }
+    });
+    doc.save(DB.unitName+'_'+date+'_analiz.pdf');
+    showToast('Analiz PDF indirildi \u2014 '+dataList.length+' tag','success');
+  } else {
+    var tag=getTag(selTag); if(!tag){ showToast('Tag secin','error'); return; }
+    var d=getTagAnalysisData(tag);
+    if(!d){ showToast('Bu tag icin olcum yok','warn'); return; }
+    var doc=new jsPDF({orientation:'portrait',unit:'mm',format:'a4'});
+    doc.setFontSize(16);doc.setTextColor(30,30,30);doc.text('TERMAL TAKIP - ANALIZ',14,18);
+    doc.setFontSize(9);doc.setTextColor(80);
+    doc.text('Unite: '+DB.unitName,14,27);
+    doc.text('Tag: '+d.tagName,14,33);
+    doc.text('Olusturma: '+dateStr,14,39);
+    doc.setFontSize(11);doc.setTextColor(0,136,187);
+    doc.text('Olcum: '+d.temp+'\u00b0C'+((d.ambient!==null&&d.ambient!==undefined)?'   Ortam: '+d.ambient+'\u00b0C':''),14,50);
+    var stColor=d.st==='red'?[200,30,40]:d.st==='yellow'?[160,110,0]:[0,150,80];
+    doc.setFontSize(12);doc.setTextColor(stColor[0],stColor[1],stColor[2]);
+    doc.text('Durum: '+d.stTxt+' ('+d.tag.yellowLimit+'-'+d.tag.redLimit+'\u00b0C esik)',14,58);
+    doc.setFontSize(9);doc.setTextColor(80);
+    var yy=68;
+    if(d.dt.status==='rising'||d.dt.status==='normal'){
+      doc.text('Delta T Egilimi: son '+(d.dt.windowSize||0)+' olcum ortalamasi '+d.dt.avg+'K idi, simdi '+d.dt.current+'K'+(d.dt.status==='rising'?' (yukselis egilimi tespit edildi)':''),14,yy,{maxWidth:182}); yy+=12;
+    } else if(d.dt.status==='baseline'){
+      doc.text('Delta T: '+d.dt.current+'K (referans olusturuluyor, karsilastirma icin sonraki olcumler gerekli)',14,yy,{maxWidth:182}); yy+=12;
+    } else {
+      doc.text('Delta T: Ortam sicakligi takibi bu tag icin kapali.',14,yy); yy+=8;
+    }
+    if(d.gapDays!==null){ doc.text('Olcumler arasi '+d.gapDays+' gun var.',14,yy); yy+=10; }
+    doc.setFontSize(22);doc.setTextColor(stColor[0],stColor[1],stColor[2]);
+    doc.text('Saglik Skoru: '+d.score+' / 100',14,yy+8);
+    yy+=22;
+    doc.setFontSize(9);doc.setTextColor(50);
+    doc.text('Yorum:',14,yy);
+    doc.setFontSize(9);doc.setTextColor(80);
+    doc.text(d.comment,14,yy+6,{maxWidth:182});
+    doc.save(DB.unitName+'_'+d.tagName+'_'+date+'_analiz.pdf');
+    showToast('Analiz PDF indirildi \u2014 '+d.tagName,'success');
+  }
+}
+
 // ─── ANALİZ ───
 function calcDeltaTAnalysis(tag){
   var ms = tag.measurements.filter(function(m){ return m.ambient!==null && m.ambient!==undefined; });
@@ -1363,7 +1448,7 @@ function showAnalysis(tagName){
     gapBlock='<div style="font-size:11px;color:var(--text-dim);margin-bottom:10px">&#9201; Olcumler arasi '+gapDays+' gun var</div>';
   }
 
-  var html='<div class="modal-title">&#128300; Analiz &mdash; '+tag.name+'</div>'+
+  var html='<div class="modal-title">&#128300; Analiz &mdash; '+DB.unitName+' / '+tag.name+'</div>'+
     '<div style="font-size:13px;margin-bottom:10px">Olcum: <b style="color:var(--accent)">'+last.temp+'&deg;C</b>'+
     (last.ambient!==null&&last.ambient!==undefined?' &nbsp;|&nbsp; Ortam: <b>'+last.ambient+'&deg;C</b>':'')+
     '</div>'+
@@ -1374,7 +1459,22 @@ function showAnalysis(tagName){
     '<div><div style="font-size:10px;color:var(--text-dim);letter-spacing:1px;text-transform:uppercase">Saglik Skoru</div><div style="font-size:9px;color:var(--text-dim)">/ 100</div></div>'+
     '</div>'+
     '<div style="font-size:12px;color:var(--text-mid);line-height:1.7;margin-bottom:4px"><b style="color:var(--text)">Yorum:</b> '+analysisComment(st,dt)+'</div>'+
-    '<div class="modal-actions"><button class="btn btn-ghost btn-full" onclick="closeModal()">Kapat</button></div>';
+    '<div class="modal-actions"><button class="btn btn-ghost" onclick="showAnalysisInfo()">&#8505; Nasil Hesaplaniyor?</button><button class="btn btn-primary" style="flex:1" onclick="closeModal()">Kapat</button></div>';
+  showModal(html);
+}
+function showAnalysisInfo(){
+  var html='<div class="modal-title">&#8505; Analiz Nasil Hesaplaniyor?</div>'+
+    '<div style="font-size:12px;color:var(--text-mid);line-height:1.85">'+
+    '<b style="color:var(--text)">1) Mutlak Sicaklik</b><br>'+
+    'Son olcum, tag icin tanimli Sari/Kirmizi limitlerle karsilastirilir. Limit altindaysa Normal, Sari limiti gectiyse Uyari, Kirmizi limiti gectiyse Kritik.<br><br>'+
+    '<b style="color:var(--text)">2) Delta T Egilimi</b><br>'+
+    'Delta T = Motor Sicakligi &minus; Ortam Sicakligi. Bu, motorun mevsim/ortamdan bagimsiz kendi isinmasini gosterir. Son olcumun Delta T degeri, onceki en fazla 5 olcumun Delta T ortalamasiyla karsilastirilir. Fark 5K veya daha fazlaysa "yukselis egilimi" olarak isaretlenir — motor, ortam sabit olsa bile normalden fazla isiniyor demektir. Yeterli gecmis veri yoksa referans (baseline) olusturulur, henuz karsilastirma yapilmaz.<br><br>'+
+    '<b style="color:var(--text)">3) Saglik Skoru (0-100)</b><br>'+
+    '100 puandan baslar. Kirmizi durumda &minus;50, Sari durumda &minus;20 puan kirilir. Delta T yukselis egilimindeyse ayrica &minus;20 puan kirilir. Bu ikisi disinda hicbir sey skoru etkilemez.<br><br>'+
+    '<b style="color:var(--text)">Skora Dahil Olmayanlar</b><br>'+
+    'Olcumler arasi gecen gun sayisi sadece bilgi amacli gosterilir, skoru etkilemez — fabrika ortaminda olcum araliklarinin duzensiz olmasi normal kabul edilir. Sicaklik artis hizi (derece/saat) da olcum araliklari tutarli olmadigi icin hesaba katilmaz.'+
+    '</div>'+
+    '<div class="modal-actions"><button class="btn btn-primary btn-full" onclick="closeModal()">Anladim</button></div>';
   showModal(html);
 }
 
