@@ -1307,6 +1307,33 @@ function getTagAnalysisData(tag){
   return {tag:tag,tagName:tag.name,temp:l,ambient:last.ambient,st:st,stTxt:stTxt,dt:dt,score:score,comment:comment,gapDays:gapDays};
 }
 
+// PDF'in altina eklenen, analizde kullanilan kriterleri aciklayan bolum.
+// startY: baslangic dikey konum (mm). maxWidth: metin sarma genisligi (mm). Kullanilan son Y konumunu dondurur.
+function addAnalysisCriteriaSection(doc, startY, maxWidth){
+  var pageH = doc.internal.pageSize.getHeight();
+  var y = startY;
+  if(y > pageH-55){ doc.addPage(); y = 20; }
+  doc.setDrawColor(210,210,210); doc.line(14, y, 14+maxWidth, y); y+=7;
+  doc.setFontSize(11); doc.setTextColor(0,136,187); doc.setFont(undefined,'bold');
+  doc.text('Analiz Kriterleri', 14, y); y+=6;
+  var items=[
+    ['1) Mutlak Sicaklik','Son olcum, tag icin tanimli Sari/Kirmizi limitlerle karsilastirilir. Limit altindaysa Normal, Sari limiti gectiyse Uyari, Kirmizi limiti gectiyse Kritik.'],
+    ['2) Delta T Egilimi','Delta T = Motor Sicakligi - Ortam Sicakligi (motorun ortamdan bagimsiz kendi isinmasi). Son olcumun Delta T degeri, onceki en fazla 5 olcumun Delta T ortalamasiyla karsilastirilir. Fark 5K veya daha fazlaysa "yukselis egilimi" olarak isaretlenir. Yeterli gecmis veri yoksa referans (baseline) olusturulur.'],
+    ['3) Saglik Skoru (0-100)','100 puandan baslar. Kirmizi durumda -50, Sari durumda -20 puan kirilir. Delta T yukselis egilimindeyse ayrica -20 puan kirilir. Bu ikisi disinda hicbir sey skoru etkilemez.'],
+    ['Skora Dahil Olmayanlar','Olcumler arasi gecen gun sayisi (fabrika ortaminda duzensiz olcum araligi normal kabul edilir) ve sicaklik artis hizi (olcum araliklari tutarli olmadigindan) skoru etkilemez, sadece bilgi amaclidir.']
+  ];
+  items.forEach(function(it){
+    if(y > pageH-25){ doc.addPage(); y=20; }
+    doc.setFont(undefined,'bold'); doc.setFontSize(8.5); doc.setTextColor(60);
+    doc.text(it[0], 14, y); y+=4;
+    doc.setFont(undefined,'normal'); doc.setFontSize(8); doc.setTextColor(105);
+    var lines=doc.splitTextToSize(it[1], maxWidth);
+    doc.text(lines, 14, y); y += lines.length*3.6 + 3.5;
+  });
+  doc.setFont(undefined,'normal');
+  return y;
+}
+
 function doExportAnalysisPDF(){
   if(typeof window.jspdf==='undefined'){ showToast('PDF kutuphanesi yuklenemedi','error'); return; }
   var selTag=document.getElementById('raporTag')?document.getElementById('raporTag').value:'all';
@@ -1340,6 +1367,8 @@ function doExportAnalysisPDF(){
         }
       }
     });
+    var finalY = doc.lastAutoTable ? doc.lastAutoTable.finalY : 28;
+    addAnalysisCriteriaSection(doc, finalY+10, 260);
     doc.save(DB.unitName+'_'+date+'_analiz.pdf');
     showToast('Analiz PDF indirildi \u2014 '+dataList.length+' tag','success');
   } else {
@@ -1373,7 +1402,10 @@ function doExportAnalysisPDF(){
     doc.setFontSize(9);doc.setTextColor(50);
     doc.text('Yorum:',14,yy);
     doc.setFontSize(9);doc.setTextColor(80);
-    doc.text(d.comment,14,yy+6,{maxWidth:182});
+    var commentLines=doc.splitTextToSize(d.comment,182);
+    doc.text(commentLines,14,yy+6);
+    yy += 6 + commentLines.length*4.2 + 6;
+    addAnalysisCriteriaSection(doc, yy, 182);
     doc.save(DB.unitName+'_'+d.tagName+'_'+date+'_analiz.pdf');
     showToast('Analiz PDF indirildi \u2014 '+d.tagName,'success');
   }
