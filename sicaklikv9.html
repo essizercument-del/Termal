@@ -803,7 +803,9 @@ function renderKayit(ctx){
     '<div class="form-group"><label class="form-label">2 &mdash; Motor Sicakligi (&deg;C)</label><input type="number" class="form-input temp-input" id="kayitTemp" placeholder="0" min="-40" max="300" inputmode="decimal"></div>'+
     ambientSection+limitSection+
     '<div class="form-group"><label class="form-label">Not</label><input type="text" class="form-input" id="kayitNote" placeholder="Not ekle..."><div class="note-chips">'+chips+'</div></div>'+
-    mini+'<div style="margin-top:14px"><button class="btn btn-primary btn-full" onclick="doKaydet()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>KAYDET</button></div></div>';
+    mini+'<div style="margin-top:14px"><button class="btn btn-primary btn-full" onclick="doKaydet()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>KAYDET</button></div>'+
+    (tag&&tag.measurements.length?'<div style="margin-top:8px"><button class="btn btn-ghost btn-full" onclick="showAnalysis(\''+tag.name+'\')" style="border-color:var(--accent);color:var(--accent)">&#128300; Son Olcumu Analiz Et</button></div>':'')+
+    '</div>';
 }
 
 function setNote(text){
@@ -905,6 +907,7 @@ function renderTagDetail(ctx){
     '<button class="btn btn-ghost btn-sm" onclick="showTagInfo(\''+tag.name+'\')">&#128300; Bilgi</button>'+
     '<button class="btn btn-primary btn-sm" onclick="navigate(\'kayit\',{tag:\''+tag.name+'\'})">+ Olcum</button>'+
     '<button class="btn btn-ghost btn-sm" onclick="navigate(\'rapor\',{tag:\''+tag.name+'\'})">&#128202; Rapor</button>'+
+    (tag.measurements.length?'<button class="btn btn-ghost btn-sm" onclick="showAnalysis(\''+tag.name+'\')" style="border-color:var(--accent);color:var(--accent)">&#128300; Analiz</button>':'')+
     '</div></div>'+
     motorSurucuOzet(tag)+chartSection+
     '<div class="section-div">Olcumler ('+tag.measurements.length+')</div>'+measHtml;
@@ -1289,6 +1292,90 @@ function doExportPDF(){
   doc.autoTable({startY:yPos,head:[['Tarih','Saat','Sicaklik','Delta','Not','Durum']],body:body,styles:{fontSize:9,cellPadding:3},headStyles:{fillColor:[0,136,187],textColor:255},alternateRowStyles:{fillColor:[248,250,254]},columnStyles:{4:{cellWidth:50}},didParseCell:function(data){ if(data.column.index===5&&data.section==='body'){ if(data.cell.raw==='KIRMIZI')data.cell.styles.textColor=[200,30,40]; if(data.cell.raw==='SARI')data.cell.styles.textColor=[160,110,0]; } }});
   doc.save(DB.unitName+'_'+d.tagName+'_'+date+'_rapor.pdf');
   showToast('PDF: '+d.ms.length+' olcum indirildi','success');
+}
+
+// ─── ANALİZ ───
+function calcDeltaTAnalysis(tag){
+  var ms = tag.measurements.filter(function(m){ return m.ambient!==null && m.ambient!==undefined; });
+  if(ms.length < 1) return {status:'none'};
+  var current = ms[ms.length-1];
+  var currentDeltaT = parseFloat((current.temp - current.ambient).toFixed(1));
+  if(ms.length < 2) return {status:'baseline', current:currentDeltaT, avg:null, diff:null};
+  var windowArr = ms.slice(Math.max(0, ms.length-1-5), ms.length-1);
+  var avgDeltaT = windowArr.reduce(function(s,m){ return s+(m.temp-m.ambient); },0) / windowArr.length;
+  avgDeltaT = parseFloat(avgDeltaT.toFixed(1));
+  var diff = parseFloat((currentDeltaT - avgDeltaT).toFixed(1));
+  return {status: diff>=5?'rising':'normal', current:currentDeltaT, avg:avgDeltaT, diff:diff, windowSize:windowArr.length};
+}
+function calcHealthScore(tag){
+  var l = lastTemp(tag);
+  if(l===null) return null;
+  var score = 100;
+  var st = alarmStatus(l,tag);
+  if(st==='red') score -= 50;
+  else if(st==='yellow') score -= 20;
+  var dt = calcDeltaTAnalysis(tag);
+  if(dt.status==='rising') score -= 20;
+  return Math.max(0, Math.min(100, score));
+}
+function daysBetweenLastTwo(tag){
+  if(tag.measurements.length < 2) return null;
+  var last = tag.measurements[tag.measurements.length-1];
+  var prev = tag.measurements[tag.measurements.length-2];
+  var d1 = parseTRDate(prev.date), d2 = parseTRDate(last.date);
+  return Math.round((d2-d1)/86400000);
+}
+function analysisComment(st, dt){
+  var rising = dt.status==='rising';
+  if(st==='red'&&rising) return 'Sicaklik kritik esigi asti ve delta T de yukselis egiliminde — ortam sicakligindan bagimsiz bir isinma soz konusu. Acil kontrol ve rulman/yaglama incelemesi onerilir.';
+  if(st==='red') return 'Sicaklik kritik esigi asti. Acil kontrol onerilir.';
+  if(st==='yellow'&&rising) return 'Sicaklik uyari esigine girdi ve delta T de yukselis egiliminde — ortam sicakligindan bagimsiz bir isinma soz konusu. Rulman/yaglama kontrolu onerilir.';
+  if(st==='yellow') return 'Sicaklik uyari esigine yaklasti, takip edilmesi onerilir.';
+  if(rising) return 'Mutlak sicaklik normal araliktar ancak delta T yukselis egiliminde — erken bir isinma belirtisi olabilir, izlemeye devam edin.';
+  if(dt.status==='baseline') return 'Sicaklik normal aralikta. Delta T icin referans (baseline) olusturuluyor, yeterli olcum biriktiginde trend degerlendirilecek.';
+  return 'Sicaklik ve delta T normal aralikta, herhangi bir aksiyon gerekmiyor.';
+}
+function showAnalysis(tagName){
+  var tag=getTag(tagName); if(!tag) return;
+  var l=lastTemp(tag); if(l===null){ showToast('Once bir olcum girin','warn'); return; }
+  var last=tag.measurements[tag.measurements.length-1];
+  var st=alarmStatus(l,tag);
+  var stTxt=st==='red'?'KRITIK':st==='yellow'?'UYARI':'NORMAL';
+  var stIcon=st==='red'?'&#128308;':st==='yellow'?'&#127937;':'&#128994;';
+  var dt=calcDeltaTAnalysis(tag);
+  var score=calcHealthScore(tag);
+  var scoreColor=score>=80?'var(--green)':score>=50?'var(--yellow)':'var(--red)';
+  var gapDays=daysBetweenLastTwo(tag);
+
+  var dtBlock='';
+  if(dt.status==='none'){
+    dtBlock='<div style="font-size:11px;color:var(--text-dim);margin-bottom:8px">Ortam sicakligi takibi bu tag icin kapali — Delta T hesaplanamadi.</div>';
+  } else if(dt.status==='baseline'){
+    dtBlock='<div style="font-size:12px;margin-bottom:8px">&#128202; Delta T: <b>'+dt.current+'K</b> &nbsp; <span style="color:var(--text-dim)">(referans olusturuluyor)</span></div>';
+  } else {
+    var arrow=dt.status==='rising'?'&#8593;':'&#8594;';
+    var arrowColor=dt.status==='rising'?'var(--yellow)':'var(--text-mid)';
+    dtBlock='<div style="font-size:12px;margin-bottom:8px">&#128202; Delta T egilimi: son '+dt.windowSize+' olcum ortalamasi <b>'+dt.avg+'K</b> idi, simdi <b>'+dt.current+'K</b> — <span style="color:'+arrowColor+'">'+arrow+' '+(dt.diff>=0?'+':'')+dt.diff+'K'+(dt.status==='rising'?' (yukselis egilimi)':'')+'</span></div>';
+  }
+
+  var gapBlock='';
+  if(gapDays!==null){
+    gapBlock='<div style="font-size:11px;color:var(--text-dim);margin-bottom:10px">&#9201; Olcumler arasi '+gapDays+' gun var</div>';
+  }
+
+  var html='<div class="modal-title">&#128300; Analiz &mdash; '+tag.name+'</div>'+
+    '<div style="font-size:13px;margin-bottom:10px">Olcum: <b style="color:var(--accent)">'+last.temp+'&deg;C</b>'+
+    (last.ambient!==null&&last.ambient!==undefined?' &nbsp;|&nbsp; Ortam: <b>'+last.ambient+'&deg;C</b>':'')+
+    '</div>'+
+    '<div class="alarm-bar alarm-'+st+'" style="margin-bottom:10px"><span>'+stIcon+' Durum: '+stTxt+' ('+tag.yellowLimit+'-'+tag.redLimit+'&deg;C esik)</span></div>'+
+    dtBlock+gapBlock+
+    '<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;background:var(--panel);border:1px solid var(--border);border-radius:6px;padding:10px 12px">'+
+    '<div style="font-family:var(--head);font-size:26px;font-weight:800;color:'+scoreColor+'">'+score+'</div>'+
+    '<div><div style="font-size:10px;color:var(--text-dim);letter-spacing:1px;text-transform:uppercase">Saglik Skoru</div><div style="font-size:9px;color:var(--text-dim)">/ 100</div></div>'+
+    '</div>'+
+    '<div style="font-size:12px;color:var(--text-mid);line-height:1.7;margin-bottom:4px"><b style="color:var(--text)">Yorum:</b> '+analysisComment(st,dt)+'</div>'+
+    '<div class="modal-actions"><button class="btn btn-ghost btn-full" onclick="closeModal()">Kapat</button></div>';
+  showModal(html);
 }
 
 function renderYedek(){
