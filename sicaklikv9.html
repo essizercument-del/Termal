@@ -1307,11 +1307,16 @@ function getTagAnalysisData(tag){
   return {tag:tag,tagName:tag.name,temp:l,ambient:last.ambient,st:st,stTxt:stTxt,dt:dt,score:score,comment:comment,gapDays:gapDays};
 }
 
-// Ortam verisi olan son n olcumun Delta T degerlerini (en eskiden en yeniye) dizi olarak dondurur.
-function getDeltaTHistory(tag, n){
-  n = n || 5;
+// calcDeltaTAnalysis ile BIREBIR ayni pencereyi dondurur: onceki en fazla 5 olcum (eskiden yeniye)
+// + mevcut (son) olcum ayri tutulur. Boylece tabloda gosterilen ile skoru belirleyen ortalama ayni veriye dayanir.
+function getDeltaTWindowDetail(tag){
   var ambMs = tag.measurements.filter(function(m){ return m.ambient!==null&&m.ambient!==undefined; });
-  return ambMs.slice(-n).map(function(m){ return parseFloat((m.temp-m.ambient).toFixed(1)); });
+  if(!ambMs.length) return null;
+  var current = ambMs[ambMs.length-1];
+  var currentDT = parseFloat((current.temp-current.ambient).toFixed(1));
+  var prevWindow = ambMs.slice(Math.max(0, ambMs.length-6), ambMs.length-1); // ayni calcDeltaTAnalysis mantigi
+  var prevDT = prevWindow.map(function(m){ return parseFloat((m.temp-m.ambient).toFixed(1)); });
+  return {prev: prevDT, current: currentDT};
 }
 
 // PDF'in altina eklenen, analizde kullanilan kriterleri aciklayan bolum.
@@ -1380,25 +1385,25 @@ function doExportAnalysisPDF(){
     var histRows = dataList.filter(function(d){ return d.dt.status!=='none'; });
     if(histRows.length){
       doc.setFontSize(11);doc.setTextColor(0,136,187);doc.setFont(undefined,'bold');
-      doc.text('Delta T Gecmisi (Son 5 Olcum)', 14, finalY+10);
+      doc.text('Delta T Gecmisi (Onceki 5 Olcum + Son)', 14, finalY+10);
       doc.setFont(undefined,'normal');
       var histBody = histRows.map(function(d){
-        var hist = getDeltaTHistory(d.tag, 5);
+        var w = getDeltaTWindowDetail(d.tag);
         var cells = ['','','','',''];
-        for(var i=0;i<hist.length;i++){ cells[5-hist.length+i] = hist[i]+'K'; }
+        for(var i=0;i<w.prev.length;i++){ cells[5-w.prev.length+i] = w.prev[i]+'K'; }
         var egilim = d.dt.status==='rising' ? '\u2191 Yukselis (+'+d.dt.diff+'K)' : d.dt.status==='baseline' ? 'Baseline' : 'Normal';
-        return [d.tagName].concat(cells.map(function(c){ return c||'-'; })).concat([egilim]);
+        return [d.tagName].concat(cells.map(function(c){ return c||'-'; })).concat([w.current+'K'], [egilim]);
       });
       doc.autoTable({
         startY: finalY+14,
-        head:[['Tag','T-4','T-3','T-2','T-1','Son','Egilim']],
+        head:[['Tag','T-5','T-4','T-3','T-2','T-1','Son','Egilim']],
         body: histBody,
         styles:{fontSize:8,cellPadding:2.5,halign:'center'},
         headStyles:{fillColor:[0,136,187],textColor:255,fontSize:8.5},
         alternateRowStyles:{fillColor:[248,250,254]},
-        columnStyles:{0:{cellWidth:26,halign:'left'},6:{cellWidth:40,halign:'left'}},
+        columnStyles:{0:{cellWidth:24,halign:'left'},6:{fontStyle:'bold'},7:{cellWidth:40,halign:'left'}},
         didParseCell:function(data){
-          if(data.column.index===6&&data.section==='body'&&typeof data.cell.raw==='string'&&data.cell.raw.indexOf('Yukselis')>=0){ data.cell.styles.textColor=[160,110,0]; }
+          if(data.column.index===7&&data.section==='body'&&typeof data.cell.raw==='string'&&data.cell.raw.indexOf('Yukselis')>=0){ data.cell.styles.textColor=[160,110,0]; }
         }
       });
       finalY = doc.lastAutoTable.finalY;
