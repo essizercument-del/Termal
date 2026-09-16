@@ -1307,6 +1307,13 @@ function getTagAnalysisData(tag){
   return {tag:tag,tagName:tag.name,temp:l,ambient:last.ambient,st:st,stTxt:stTxt,dt:dt,score:score,comment:comment,gapDays:gapDays};
 }
 
+// Ortam verisi olan son n olcumun Delta T degerlerini (en eskiden en yeniye) dizi olarak dondurur.
+function getDeltaTHistory(tag, n){
+  n = n || 5;
+  var ambMs = tag.measurements.filter(function(m){ return m.ambient!==null&&m.ambient!==undefined; });
+  return ambMs.slice(-n).map(function(m){ return parseFloat((m.temp-m.ambient).toFixed(1)); });
+}
+
 // PDF'in altina eklenen, analizde kullanilan kriterleri aciklayan bolum.
 // startY: baslangic dikey konum (mm). maxWidth: metin sarma genisligi (mm). Kullanilan son Y konumunu dondurur.
 function addAnalysisCriteriaSection(doc, startY, maxWidth){
@@ -1318,7 +1325,7 @@ function addAnalysisCriteriaSection(doc, startY, maxWidth){
   doc.text('Analiz Kriterleri', 14, y); y+=6;
   var items=[
     ['1) Mutlak Sicaklik','Son olcum, tag icin tanimli Sari/Kirmizi limitlerle karsilastirilir. Limit altindaysa Normal, Sari limiti gectiyse Uyari, Kirmizi limiti gectiyse Kritik.'],
-    ['2) Delta T Egilimi','Delta T = Motor Sicakligi - Ortam Sicakligi (motorun ortamdan bagimsiz kendi isinmasi). Son olcumun Delta T degeri, onceki en fazla 5 olcumun Delta T ortalamasiyla karsilastirilir. Fark 5K veya daha fazlaysa "yukselis egilimi" olarak isaretlenir. Yeterli gecmis veri yoksa referans (baseline) olusturulur.'],
+    ['2) Delta T Egilimi','Delta T = Motor Sicakligi - Ortam Sicakligi (motorun ortamdan bagimsiz kendi isinmasi). Son olcumun Delta T degeri, onceki en fazla 5 olcumun (yeterli gecmis yoksa mevcut olcum sayisi kadarinin) Delta T ortalamasiyla karsilastirilir. Fark 5K veya daha fazlaysa "yukselis egilimi" olarak isaretlenir. Yeterli gecmis veri yoksa referans (baseline) olusturulur.'],
     ['3) Saglik Skoru (0-100)','100 puandan baslar. Kirmizi durumda -50, Sari durumda -20 puan kirilir. Delta T yukselis egilimindeyse ayrica -40 puan kirilir. Bu ikisi disinda hicbir sey skoru etkilemez.'],
     ['Skora Dahil Olmayanlar','Olcumler arasi gecen gun sayisi (fabrika ortaminda duzensiz olcum araligi normal kabul edilir) ve sicaklik artis hizi (olcum araliklari tutarli olmadigindan) skoru etkilemez, sadece bilgi amaclidir.']
   ];
@@ -1368,6 +1375,35 @@ function doExportAnalysisPDF(){
       }
     });
     var finalY = doc.lastAutoTable ? doc.lastAutoTable.finalY : 28;
+
+    // Delta T Gecmisi tablosu — son 5 olcumun trendini gosterir (tek tag raporundaki gibi degil, ozet PDF'te de gorunur olmasi icin)
+    var histRows = dataList.filter(function(d){ return d.dt.status!=='none'; });
+    if(histRows.length){
+      doc.setFontSize(11);doc.setTextColor(0,136,187);doc.setFont(undefined,'bold');
+      doc.text('Delta T Gecmisi (Son 5 Olcum)', 14, finalY+10);
+      doc.setFont(undefined,'normal');
+      var histBody = histRows.map(function(d){
+        var hist = getDeltaTHistory(d.tag, 5);
+        var cells = ['','','','',''];
+        for(var i=0;i<hist.length;i++){ cells[5-hist.length+i] = hist[i]+'K'; }
+        var egilim = d.dt.status==='rising' ? '\u2191 Yukselis (+'+d.dt.diff+'K)' : d.dt.status==='baseline' ? 'Baseline' : 'Normal';
+        return [d.tagName].concat(cells.map(function(c){ return c||'-'; })).concat([egilim]);
+      });
+      doc.autoTable({
+        startY: finalY+14,
+        head:[['Tag','T-4','T-3','T-2','T-1','Son','Egilim']],
+        body: histBody,
+        styles:{fontSize:8,cellPadding:2.5,halign:'center'},
+        headStyles:{fillColor:[0,136,187],textColor:255,fontSize:8.5},
+        alternateRowStyles:{fillColor:[248,250,254]},
+        columnStyles:{0:{cellWidth:26,halign:'left'},6:{cellWidth:40,halign:'left'}},
+        didParseCell:function(data){
+          if(data.column.index===6&&data.section==='body'&&typeof data.cell.raw==='string'&&data.cell.raw.indexOf('Yukselis')>=0){ data.cell.styles.textColor=[160,110,0]; }
+        }
+      });
+      finalY = doc.lastAutoTable.finalY;
+    }
+
     addAnalysisCriteriaSection(doc, finalY+10, 260);
     doc.save(DB.unitName+'_'+date+'_analiz.pdf');
     showToast('Analiz PDF indirildi \u2014 '+dataList.length+' tag','success');
@@ -1500,7 +1536,7 @@ function showAnalysisInfo(){
     '<b style="color:var(--text)">1) Mutlak Sicaklik</b><br>'+
     'Son olcum, tag icin tanimli Sari/Kirmizi limitlerle karsilastirilir. Limit altindaysa Normal, Sari limiti gectiyse Uyari, Kirmizi limiti gectiyse Kritik.<br><br>'+
     '<b style="color:var(--text)">2) Delta T Egilimi</b><br>'+
-    'Delta T = Motor Sicakligi &minus; Ortam Sicakligi. Bu, motorun mevsim/ortamdan bagimsiz kendi isinmasini gosterir. Son olcumun Delta T degeri, onceki en fazla 5 olcumun Delta T ortalamasiyla karsilastirilir. Fark 5K veya daha fazlaysa "yukselis egilimi" olarak isaretlenir — motor, ortam sabit olsa bile normalden fazla isiniyor demektir. Yeterli gecmis veri yoksa referans (baseline) olusturulur, henuz karsilastirma yapilmaz.<br><br>'+
+    'Delta T = Motor Sicakligi &minus; Ortam Sicakligi. Bu, motorun mevsim/ortamdan bagimsiz kendi isinmasini gosterir. Son olcumun Delta T degeri, onceki en fazla 5 olcumun (yeterli gecmis yoksa mevcut olcum sayisi kadarinin) Delta T ortalamasiyla karsilastirilir. Fark 5K veya daha fazlaysa "yukselis egilimi" olarak isaretlenir — motor, ortam sabit olsa bile normalden fazla isiniyor demektir. Yeterli gecmis veri yoksa referans (baseline) olusturulur, henuz karsilastirma yapilmaz.<br><br>'+
     '<b style="color:var(--text)">3) Saglik Skoru (0-100)</b><br>'+
     '100 puandan baslar. Kirmizi durumda &minus;50, Sari durumda &minus;20 puan kirilir. Delta T yukselis egilimindeyse ayrica &minus;40 puan kirilir. Bu ikisi disinda hicbir sey skoru etkilemez.<br><br>'+
     '<b style="color:var(--text)">Skora Dahil Olmayanlar</b><br>'+
