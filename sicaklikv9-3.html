@@ -734,6 +734,7 @@ function renderHome(){
   var tags=DB.tags;
   var totalMeas=tags.reduce(function(s,t){ return s+t.measurements.length; },0);
   var alarmTags=tags.filter(function(t){ var l=lastTemp(t); return l!==null&&alarmStatus(l,t)!=='normal'; });
+  var deltaAlarmTags=tags.filter(function(t){ return calcDeltaTAnalysis(t).status==='rising'; });
   var banner='';
   if(alarmTags.length){
     var alarmList=alarmTags.map(function(t){
@@ -746,6 +747,17 @@ function renderHome(){
       '<div style="font-size:11px;line-height:1.6">'+alarmList+'</div>'+
       '</div>';
   }
+  var deltaBanner='';
+  if(deltaAlarmTags.length){
+    var deltaList=deltaAlarmTags.map(function(t){
+      var dt=calcDeltaTAnalysis(t);
+      return '<span onclick="navigate(\'tag_detail\',{tag:\''+t.name+'\'})" style="display:inline-flex;align-items:center;gap:4px;margin:0 10px 4px 0;cursor:pointer;text-decoration:underline;text-decoration-style:dotted">&#128200; <b>'+t.name+'</b> (+'+dt.diff+'K)</span>';
+    }).join('');
+    deltaBanner='<div style="background:rgba(255,184,0,.09);border:1px solid rgba(255,184,0,.3);border-radius:8px;padding:10px 12px;margin-bottom:10px;display:flex;flex-direction:column;gap:6px">'+
+      '<div style="display:flex;align-items:center;gap:7px"><span style="font-size:16px">&#128200;</span><span style="color:var(--yellow)"><b>'+deltaAlarmTags.length+'</b> tag Delta T yukselis egiliminde!</span></div>'+
+      '<div style="font-size:11px;line-height:1.6">'+deltaList+'</div>'+
+      '</div>';
+  }
   var overdueTags=[];
   var tagRows=tags.map(function(t){
     var l=lastTemp(t); var st=l!==null?alarmStatus(l,t):'normal';
@@ -754,10 +766,14 @@ function renderHome(){
       overdueTags.push({name:t.name,days:warnDays});
       warnBadge='<span style="background:rgba(255,184,0,.13);border:1px solid rgba(255,184,0,.35);border-radius:3px;padding:1px 7px;font-size:9px;font-weight:700;color:var(--yellow);letter-spacing:.5px;margin-right:4px">'+warnDays+' GUN</span>';
     }
+    var deltaBadge='';
+    if(calcDeltaTAnalysis(t).status==='rising'){
+      deltaBadge='<span title="Delta T yukselis egiliminde" style="background:rgba(255,184,0,.13);border:1px solid rgba(255,184,0,.35);border-radius:3px;padding:1px 7px;font-size:9px;font-weight:700;color:var(--yellow);letter-spacing:.5px;margin-right:4px">&#128200; DELTA</span>';
+    }
     var ambTrend=t.trackAmbient?calcAmbientTrend(t):null;
     var ambTrendStr=ambTrend?' &nbsp;<span style="color:var(--text-dim)">|</span>&nbsp; '+ambientTrendLabel(ambTrend):'';
     return '<div class="list-item" onclick="navigate(\'tag_detail\',{tag:\''+t.name+'\'})">'+
-      '<div style="flex:1"><div style="display:flex;align-items:center;gap:6px"><div class="item-name">'+t.name+'</div>'+warnBadge+'</div>'+
+      '<div style="flex:1"><div style="display:flex;align-items:center;gap:6px"><div class="item-name">'+t.name+'</div>'+warnBadge+deltaBadge+'</div>'+
       '<div class="item-sub">'+(l!==null?l+'&deg;C &nbsp;&middot;&nbsp; ':'Olcum yok ')+trendLabel(trend)+ambTrendStr+'</div></div>'+
       (l!==null?'<span class="badge badge-'+st+'">'+l+'&deg;</span>':'')+
       '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--text-dim)" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg></div>';
@@ -771,7 +787,7 @@ function renderHome(){
     '<div class="stat-box"><div class="stat-val">'+tags.length+'</div><div class="stat-lbl">Tag</div></div>'+
     '<div class="stat-box"><div class="stat-val">'+totalMeas+'</div><div class="stat-lbl">Olcum</div></div>'+
     '<div class="stat-box"><div class="stat-val">'+alarmTags.length+'</div><div class="stat-lbl">Alarm</div></div>'+
-    '</div>'+banner+
+    '</div>'+banner+deltaBanner+
     '<div class="home-grid">'+
     '<div class="home-tile primary" onclick="navigate(\'kayit\')"><svg viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg><div class="tile-label">Kayit Ekle</div><div class="tile-sub">Sicaklik gir</div></div>'+
     '<div class="home-tile" onclick="navigate(\'rapor\')"><svg viewBox="0 0 24 24" fill="none" stroke="var(--text-mid)" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="8" y1="12" x2="8" y2="17"/><line x1="12" y1="8" x2="12" y2="17"/><line x1="16" y1="14" x2="16" y2="17"/></svg><div class="tile-label">Rapor</div><div class="tile-sub">Excel / PDF</div></div>'+
@@ -1079,10 +1095,9 @@ function renderRapor(ctx){
   return '<div class="card"><div class="card-head"><div class="dot"></div>Rapor &mdash; '+DB.unitName+'</div>'+
     '<div class="form-group"><label class="form-label">Kapsam</label><div class="select-wrap"><select class="form-select" id="raporTag" onchange="navigate(\'rapor\',{tag:this.value},false)">'+(tagOpts||'<option value="all">Tum Unite</option>')+'</select></div></div>'+
     '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px" class="form-group"><div><label class="form-label">Baslangic</label><input type="date" class="form-input" id="raporFrom"></div><div><label class="form-label">Bitis</label><input type="date" class="form-input" id="raporTo" value="'+today+'"></div></div>'+
-    preview+'<div style="display:flex;gap:7px;margin-top:4px"><button class="btn btn-primary btn-full" onclick="doExportExcel()">&#128202; Excel</button><button class="btn btn-ghost btn-full" onclick="doExportPDF()">&#128196; PDF</button></div>'+
-    '<div style="margin-top:7px"><button class="btn btn-ghost btn-full" onclick="doExportGrafikPDF()" style="border-color:var(--accent);color:var(--accent)">&#128200; Grafik PDF</button></div>'+
-    '<div style="margin-top:7px"><button class="btn btn-ghost btn-full" onclick="doExportAnalysisPDF()" style="border-color:var(--yellow);color:var(--yellow)">&#128300; Analiz PDF</button></div></div>'+
-    '<div class="card" style="font-size:10px;color:var(--text-dim);line-height:1.9"><b style="color:var(--text-mid)">Dosya adi:</b><br><code style="color:var(--accent)">'+fileLabel+'.xlsx / .pdf</code><br>'+(selTag==='all'?'<span style="color:var(--text-mid)">Tum Unite secilince sadece ozet tablo &middot; Tag detayi icin tag secin</span>':'')+'</div>';
+    preview+'<div style="margin-top:4px"><button class="btn btn-primary btn-full" onclick="doExportExcel()">&#128202; Excel</button></div>'+
+    '<div style="margin-top:7px"><button class="btn btn-ghost btn-full" onclick="doExportGrafikPDF()" style="border-color:var(--accent);color:var(--accent)">&#128200; Grafik PDF</button></div></div>'+
+    '<div class="card" style="font-size:10px;color:var(--text-dim);line-height:1.9"><b style="color:var(--text-mid)">Dosya adi:</b><br><code style="color:var(--accent)">'+fileLabel+'.xlsx</code><br>'+(selTag==='all'?'<span style="color:var(--text-mid)">Tum Unite secilince sadece ozet tablo &middot; Tag detayi icin tag secin</span>':'')+'</div>';
 }
 
 function getRaporData(){
@@ -1165,13 +1180,15 @@ async function doExportGrafikPDF(){
   doc.setFontSize(20); doc.setTextColor(0,136,187);
   doc.text('TERMAL TAKIP', 105, 40, {align:'center'});
   doc.setFontSize(14); doc.setTextColor(50,50,50);
-  doc.text('Grafik Raporu', 105, 52, {align:'center'});
+  doc.text('Grafik ve Analiz Raporu', 105, 52, {align:'center'});
   doc.setFontSize(10); doc.setTextColor(100);
   doc.text('Unite: ' + DB.unitName, 105, 68, {align:'center'});
   doc.text('Tarih: ' + dateStr, 105, 76, {align:'center'});
   doc.text('Tag Sayisi: ' + tags.length, 105, 84, {align:'center'});
   var totalMeas = tags.reduce(function(s,t){ return s+t.measurements.length; },0);
   doc.text('Toplam Olcum: ' + totalMeas, 105, 92, {align:'center'});
+  doc.setFontSize(9); doc.setTextColor(140);
+  doc.text('Her tag icin grafik, son olcumler, Delta T egilimi ve Saglik Skoru analizini icerir.', 105, 102, {align:'center'});
 
   // Her tag için grafik
   for(var i=0; i<tags.length; i++){
@@ -1257,42 +1274,41 @@ async function doExportGrafikPDF(){
         }
       }
     });
+
+    // Tag icin analiz bloğu (Durum / Delta T egilimi / Saglik Skoru / Yorum) — grafigin hemen altinda,
+    // ayri bir "Analiz PDF" indirmeye gerek kalmasin diye Grafik PDF'e de eklendi.
+    var adata = getTagAnalysisData(tag);
+    if(adata){
+      var pageH = doc.internal.pageSize.getHeight();
+      var ay = (doc.lastAutoTable ? doc.lastAutoTable.finalY : 122) + 8;
+      if(ay > pageH-45){ doc.addPage(); ay = 20; }
+      var stColor = adata.st==='red'?[200,30,40]:adata.st==='yellow'?[160,110,0]:[0,150,80];
+      doc.setFontSize(10); doc.setTextColor(0,136,187); doc.setFont(undefined,'bold');
+      doc.text('Analiz', 14, ay); ay+=6;
+      doc.setFont(undefined,'normal');
+      doc.setFontSize(9); doc.setTextColor(stColor[0],stColor[1],stColor[2]);
+      doc.text('Durum: '+adata.stTxt+'   |   Saglik Skoru: '+adata.score+' / 100', 14, ay); ay+=6;
+      doc.setFontSize(8.5); doc.setTextColor(80);
+      if(adata.dt.status==='rising'||adata.dt.status==='normal'){
+        var dtLine = 'Delta T Egilimi: onceki '+(adata.dt.windowSize||0)+' olcum ortalamasi '+adata.dt.avg+'K idi, simdi '+adata.dt.current+'K'+(adata.dt.status==='rising'?' (yukselis egilimi)':'');
+        var dtLines = doc.splitTextToSize(dtLine, 182);
+        doc.text(dtLines, 14, ay); ay += dtLines.length*3.8 + 2;
+      } else if(adata.dt.status==='baseline'){
+        doc.text('Delta T: '+adata.dt.current+'K (referans olusturuluyor)', 14, ay); ay+=5;
+      }
+      var commentLines = doc.splitTextToSize('Yorum: '+adata.comment, 182);
+      doc.text(commentLines, 14, ay);
+    }
   }
+
+  // Rapor sonuna, tum tag'ler icin tek seferlik kriter aciklamasi
+  doc.addPage();
+  doc.setFontSize(14); doc.setTextColor(30,30,30);
+  doc.text('Analiz Kriterleri', 14, 18);
+  addAnalysisCriteriaSection(doc, 26, 182);
 
   doc.save(DB.unitName+'_'+date+'_grafik.pdf');
-  showToast('Grafik PDF indirildi — '+tags.length+' tag','success');
-}
-
-function doExportPDF(){
-  if(typeof window.jspdf==='undefined'){ showToast('PDF kutuphanesi yuklenemedi','error'); return; }
-  var d=getRaporData(); if(!d) return;
-  var jsPDF=window.jspdf.jsPDF;
-  var doc=new jsPDF({orientation:'portrait',unit:'mm',format:'a4'});
-  var date=new Date().toISOString().slice(0,10);
-  var dateStr=new Date().toLocaleString('tr-TR');
-  var totalMeas=d.tags.reduce(function(s,td){ return s+td.ms.length; },0);
-  doc.setFontSize(16);doc.setTextColor(30,30,30);doc.text('TERMAL TAKIP RAPORU',14,18);
-  doc.setFontSize(9);doc.setTextColor(80);
-  doc.text('Unite: '+DB.unitName,14,27);
-  doc.text('Kapsam: '+(d.mode==='all'?'Tum Unite ('+d.tags.length+' tag)':d.tagName),14,33);
-  doc.text('Toplam Olcum: '+totalMeas,14,39);
-  doc.text('Olusturma: '+dateStr,14,45);
-  var yPos=52;
-  if(d.mode==='all'){
-    var docL=new jsPDF({orientation:'landscape',unit:'mm',format:'a4'});
-    docL.setFontSize(15);docL.setTextColor(30,30,30);docL.text('TERMAL TAKIP RAPORU — '+DB.unitName,14,16);
-    docL.setFontSize(8);docL.setTextColor(100);docL.text('Kapsam: Tum Unite  |  Tag Sayisi: '+DB.tags.length+'  |  Olusturma: '+dateStr,14,23);
-    var sb=DB.tags.map(function(t){ var last3=t.measurements.slice(-3).reverse(); var l=last3.length?last3[0].temp:null; var st=l!==null?(l>=t.redLimit?'KIRMIZI':l>=t.yellowLimit?'SARI':'NORMAL'):'-'; function mCell(m){ return m?m.temp+'\u00b0C\n'+m.date+' '+m.time:'-'; } return [t.name,String(t.measurements.length),mCell(last3[2]),mCell(last3[1]),mCell(last3[0]),t.yellowLimit+'\u00b0C',t.redLimit+'\u00b0C',st]; });
-    docL.autoTable({startY:28,head:[['Tag','Toplam','3. Son Olcum','2. Son Olcum','Son Olcum','Sari Limit','Kirmizi Limit','Durum']],body:sb,styles:{fontSize:9,cellPadding:3,lineHeight:1.4},headStyles:{fillColor:[0,136,187],textColor:255,fontSize:9},alternateRowStyles:{fillColor:[248,250,254]},columnStyles:{0:{cellWidth:22},1:{cellWidth:18},2:{cellWidth:38},3:{cellWidth:38},4:{cellWidth:38},5:{cellWidth:22},6:{cellWidth:26},7:{cellWidth:22}},didParseCell:function(data){ if(data.column.index===7&&data.section==='body'){ if(data.cell.raw==='KIRMIZI')data.cell.styles.textColor=[200,30,40]; if(data.cell.raw==='SARI')data.cell.styles.textColor=[160,110,0]; } if(data.column.index===4&&data.section==='body'&&data.cell.raw!=='-') data.cell.styles.fontStyle='bold'; }});
-    docL.save(DB.unitName+'_'+date+'_ozet.pdf');
-    showToast('PDF: '+DB.tags.length+' tag, son 3 olcum ile indirildi','success'); return;
-  }
-  doc.setFontSize(10);doc.setTextColor(0,136,187);doc.text('TAG: '+d.tagName,14,yPos);yPos+=5;
-  doc.setFontSize(8);doc.setTextColor(100);doc.text('Sari Limit: '+d.tag.yellowLimit+'\u00b0C    Kirmizi Limit: '+d.tag.redLimit+'\u00b0C    '+d.ms.length+' olcum',14,yPos);yPos+=4;
-  var body=d.ms.map(function(m,i){ var prev=i>0?d.ms[i-1].temp:null; var delta=prev!==null?(m.temp-prev>0?'+':'')+(m.temp-prev).toFixed(1)+'\u00b0':'-'; var status=m.temp>=d.tag.redLimit?'KIRMIZI':m.temp>=d.tag.yellowLimit?'SARI':'NORMAL'; return [m.date,m.time,m.temp+'\u00b0C',delta,m.note||'-',status]; });
-  doc.autoTable({startY:yPos,head:[['Tarih','Saat','Sicaklik','Delta','Not','Durum']],body:body,styles:{fontSize:9,cellPadding:3},headStyles:{fillColor:[0,136,187],textColor:255},alternateRowStyles:{fillColor:[248,250,254]},columnStyles:{4:{cellWidth:50}},didParseCell:function(data){ if(data.column.index===5&&data.section==='body'){ if(data.cell.raw==='KIRMIZI')data.cell.styles.textColor=[200,30,40]; if(data.cell.raw==='SARI')data.cell.styles.textColor=[160,110,0]; } }});
-  doc.save(DB.unitName+'_'+d.tagName+'_'+date+'_rapor.pdf');
-  showToast('PDF: '+d.ms.length+' olcum indirildi','success');
+  showToast('Grafik + Analiz PDF indirildi — '+tags.length+' tag','success');
 }
 
 function getTagAnalysisData(tag){
