@@ -37,6 +37,7 @@ html,body{background:var(--bg);color:var(--text);font-family:var(--mono);font-si
 .spacer{flex:1}
 .cloud-dot{width:7px;height:7px;border-radius:50%;background:var(--text-dim);flex-shrink:0;transition:background .3s;cursor:pointer}
 .cloud-dot.on{background:var(--green)}
+.cloud-dot.on.pending{background:var(--yellow)}
 .clock{font-size:10px;color:var(--text-dim);white-space:nowrap}
 #content{padding:68px 12px 70px;max-width:600px;margin:0 auto}
 #bottomnav{position:fixed;bottom:0;left:0;right:0;z-index:100;height:60px;background:rgba(8,12,20,.97);border-top:1px solid var(--border);display:grid;grid-template-columns:repeat(6,1fr);backdrop-filter:blur(8px)}
@@ -309,7 +310,44 @@ function dbLoad(){
   try{ var r = localStorage.getItem(getSK()); if(r) return JSON.parse(r); } catch(e){}
   return { unitName:'', tags:[] };
 }
-function dbSave(){ localStorage.setItem(getSK(), JSON.stringify(DB)); }
+// fromCloud=true: veri zaten buluttan geldi, tekrar gonderilmesine gerek yok.
+function dbSave(fromCloud){
+  localStorage.setItem(getSK(), JSON.stringify(DB));
+  if(fromCloud) return;
+  var u = AKTIF_UNITE || localStorage.getItem('termal_son_unite');
+  if(!u) return;
+  setPending(u, true);
+  _saveSeq++;
+  clearTimeout(_syncTimer);
+  _syncTimer = setTimeout(function(){ syncNow(); }, 2500);
+}
+
+// ─── OTOMATIK BULUT SENKRONU ───
+// Her yerel kayittan sonra (2.5 sn bekleyip) unite buluta gonderilir. Gonderilene kadar
+// 'termal_pending_<unite>' bayragi tutulur; uygulama kapanip acilsa bile, bayrak varsa
+// acilista buluttan cekip yereli EZMEK yerine once yerel veri buluta gonderilir.
+var _syncTimer = null, _saveSeq = 0;
+function isPending(u){ return localStorage.getItem('termal_pending_'+u)==='1'; }
+function setPending(u, on){
+  if(on) localStorage.setItem('termal_pending_'+u,'1'); else localStorage.removeItem('termal_pending_'+u);
+  if(typeof updateCloudDot==='function') updateCloudDot();
+}
+function syncNow(){
+  clearTimeout(_syncTimer);
+  var u = AKTIF_UNITE;
+  if(!firebaseDB || !u || !isPending(u)) return Promise.resolve();
+  var seq = _saveSeq;
+  var payload = JSON.parse(JSON.stringify(DB));
+  payload.lastSync = new Date().toISOString();
+  return firebaseDB.ref('termal/'+u).set(payload).then(function(){
+    if(seq===_saveSeq || AKTIF_UNITE!==u) setPending(u, false);
+  }).catch(function(e){
+    showToast('Buluta otomatik kayit basarisiz: '+e.message+' — veri cihazda duruyor','warn');
+  });
+}
+document.addEventListener('visibilitychange', function(){ if(document.visibilityState==='hidden') syncNow(); });
+window.addEventListener('pagehide', function(){ syncNow(); });
+window.addEventListener('online', function(){ syncNow(); });
 function getSK(){
   var u = localStorage.getItem('termal_son_unite');
   return u ? ('termal_db_' + u) : 'termal_v4';
@@ -332,6 +370,11 @@ function sanitizeTags(raw){
     });
 }
 
+// Tag adi butonlarin onclick metnine gomuldugu icin ' " \ < > karakterleri sayfayi bozar.
+function tagAdiHatasi(name){
+  if(/['"\\<>]/.test(name)) return 'Tag adinda \' " \\ < > karakterleri kullanilamaz';
+  return '';
+}
 function addTag(name, yellow, red, warnDays, amb){
   if(!Array.isArray(DB.tags)) DB.tags=[];
   if(getTag(name)) return false;
@@ -441,11 +484,16 @@ function trendLabel(trend){
   return '<span style="color:var(--text-mid)">&#8594; Stabil</span>';
 }
 function parseTRDate(d){ var p=d.split('.'); return new Date(p[2],p[1]-1,p[0]); }
+// 'YYYY-MM-DD' degerini YEREL gece yarisi olarak okur. new Date('2026-10-01') UTC kabul edilir
+// (Turkiye'de 03:00 olur) ve baslangic gunundeki olcumler rapordan dusuyordu.
+function parseISODateLocal(s){ var p=s.split('-'); return new Date(+p[0],+p[1]-1,+p[2]); }
 function filterByDate(ms,from,to){
+  var fd=from?parseISODateLocal(from):null;
+  var td=to?parseISODateLocal(to):null; if(td) td.setHours(23,59,59,999);
   return ms.filter(function(m){
     var md=parseTRDate(m.date);
-    if(from&&md<new Date(from)) return false;
-    if(to){ var td=new Date(to); td.setHours(23,59,59); if(md>td) return false; }
+    if(fd&&md<fd) return false;
+    if(td&&md>td) return false;
     return true;
   });
 }
@@ -494,20 +542,44 @@ function tryAutoConnect(){
   } catch(e){ cloudStatus='disconnected'; updateCloudDot(); checkSetup(); }
 }
 
-function uniteYukleVeTagAc(uniteAdi, tagAdi){
-  AKTIF_UNITE=fbSafe(uniteAdi);
-  localStorage.setItem('termal_son_unite',AKTIF_UNITE);
-  firebaseDB.ref('termal/'+AKTIF_UNITE).once('value').then(function(snap){
-    try{
-      var data=snap.val();
-      if(!data){ DB.unitName=uniteAdi; DB.tags=[]; dbSave(); }
-      else{
-        delete data.lastSync;
-        var beforeCnt = data.tags ? (Array.isArray(data.tags)?data.tags.length:Object.keys(data.tags).length) : 0;
-        data.tags = sanitizeTags(data.tags);
-        DB=data; dbSave();
-        if(data.tags.length<beforeCnt) showToast((beforeCnt-data.tags.length)+' bozuk tag kaydi atlandi (muhtemelen elle Firebase duzenlemesinden)','warn');
+// Uniteyi yukler. Bu unitede buluta henuz gitmemis yerel degisiklik varsa (pending) buluttaki
+// eski kopya yereli ezmesin diye yerel veri kullanilir ve buluta gonderilir. force=true ise
+// (Buluttan Yukle butonu) her zaman buluttaki veri alinir.
+function uniteVerisiGetir(uniteAdi, force){
+  var hedef=fbSafe(uniteAdi);
+  // Baska uniteye geciliyorsa, mevcut unitenin bekleyen degisikliklerini once gonder
+  var once=(AKTIF_UNITE && AKTIF_UNITE!==hedef) ? syncNow() : Promise.resolve();
+  return once.catch(function(){}).then(function(){
+    AKTIF_UNITE=hedef;
+    localStorage.setItem('termal_son_unite',hedef);
+    if(force) setPending(hedef,false);
+    if(isPending(hedef)){
+      var yerel=null;
+      try{ yerel=JSON.parse(localStorage.getItem('termal_db_'+hedef)); }catch(e){}
+      if(yerel && yerel.unitName){
+        yerel.tags=sanitizeTags(yerel.tags);
+        DB=yerel; dbSave(true);
+        showToast('Buluta gitmemis yerel kayitlar bulundu, buluta gonderiliyor...','warn');
+        syncNow();
+        return;
       }
+      setPending(hedef,false);
+    }
+    return firebaseDB.ref('termal/'+hedef).once('value').then(function(snap){
+      var data=snap.val();
+      if(!data){ DB={unitName:uniteAdi,tags:[]}; dbSave(true); return; }
+      delete data.lastSync;
+      var beforeCnt = data.tags ? (Array.isArray(data.tags)?data.tags.length:Object.keys(data.tags).length) : 0;
+      data.tags = sanitizeTags(data.tags);
+      DB=data; dbSave(true);
+      if(data.tags.length<beforeCnt) showToast((beforeCnt-data.tags.length)+' bozuk tag kaydi atlandi (muhtemelen elle Firebase duzenlemesinden)','warn');
+    });
+  });
+}
+
+function uniteYukleVeTagAc(uniteAdi, tagAdi){
+  uniteVerisiGetir(uniteAdi).then(function(){
+    try{
       document.getElementById('unitBadgeEl').textContent=DB.unitName||uniteAdi;
       checkSetup();
       if(tagAdi && getTag(tagAdi)){
@@ -541,21 +613,10 @@ function uniteSecimGoster(){
   }).catch(function(){ checkSetup(); });
 }
 
-function uniteYukle(uniteAdi){
-  AKTIF_UNITE=fbSafe(uniteAdi);
-  localStorage.setItem('termal_son_unite',AKTIF_UNITE);
+function uniteYukle(uniteAdi, force){
   document.getElementById('uniteSecimEkrani').classList.remove('open');
-  firebaseDB.ref('termal/'+AKTIF_UNITE).once('value').then(function(snap){
+  uniteVerisiGetir(uniteAdi, force).then(function(){
     try{
-      var data=snap.val();
-      if(!data){ DB.unitName=uniteAdi; DB.tags=[]; dbSave(); }
-      else{
-        delete data.lastSync;
-        var beforeCnt = data.tags ? (Array.isArray(data.tags)?data.tags.length:Object.keys(data.tags).length) : 0;
-        data.tags = sanitizeTags(data.tags);
-        DB=data; dbSave();
-        if(data.tags.length<beforeCnt) showToast((beforeCnt-data.tags.length)+' bozuk tag kaydi atlandi (muhtemelen elle Firebase duzenlemesinden)','warn');
-      }
       document.getElementById('unitBadgeEl').textContent=DB.unitName||uniteAdi;
       checkSetup(); navigate('home',{},false);
     } catch(e){ showToast('Hata: '+e.message,'error'); }
@@ -573,6 +634,7 @@ function yeniUniteFormKapat(){
 function yeniUniteKaydet(){
   var ad=document.getElementById('yeniUniteAdi').value.trim();
   if(!ad){ showToast('Unite adi zorunlu','error'); return; }
+  syncNow(); // onceki unitenin bekleyen kayitlarini gonder
   yeniUniteFormKapat();
   document.getElementById('uniteSecimEkrani').classList.remove('open');
   var adSafe=fbSafe(ad);
@@ -610,7 +672,10 @@ function doEditUniteAdi(oldName){
   if(yeniSafe===oldName){ closeModal(); return; }
   if(!firebaseDB){ showToast('Bulut baglantisi yok','error'); return; }
   showToast('Guncelleniyor...','warn');
-  firebaseDB.ref('termal/'+yeniSafe).once('value').then(function(checkSnap){
+  // Yeniden adlandirma buluttaki kopyadan yapildigi icin once bekleyen yerel kayitlari gonder
+  (AKTIF_UNITE===oldName ? syncNow() : Promise.resolve()).then(function(){
+    return firebaseDB.ref('termal/'+yeniSafe).once('value');
+  }).then(function(checkSnap){
     if(checkSnap.exists()){ showToast('Bu isimde bir unite zaten var','error'); return; }
     firebaseDB.ref('termal/'+oldName).once('value').then(function(snap){
       var data=snap.val();
@@ -638,19 +703,31 @@ function pushToCloud(){
   if(!firebaseDB){ showToast('FB baglantisi yok','error'); return; }
   if(!AKTIF_UNITE){ showToast('Unite yok: '+localStorage.getItem('termal_son_unite'),'error'); return; }
   showToast('Kaydediliyor: '+AKTIF_UNITE,'warn');
+  clearTimeout(_syncTimer);
+  var u=AKTIF_UNITE, seq=_saveSeq;
   var payload=JSON.parse(JSON.stringify(DB));
   payload.lastSync=new Date().toISOString();
-  firebaseDB.ref('termal/'+AKTIF_UNITE).set(payload)
-    .then(function(){ showToast('Kaydedildi: '+AKTIF_UNITE,'success'); })
+  firebaseDB.ref('termal/'+u).set(payload)
+    .then(function(){ if(seq===_saveSeq) setPending(u,false); showToast('Kaydedildi: '+u,'success'); })
     .catch(function(e){ showToast('HATA: '+e.message,'error'); });
 }
 function pullFromCloud(){
   if(!firebaseDB||!AKTIF_UNITE){ showToast('Unite secilmedi','error'); return; }
-  uniteYukle(AKTIF_UNITE);
+  if(isPending(AKTIF_UNITE)){
+    showModal('<div class="modal-title">&#9888; Buluttan Yukle</div>'+
+      '<p style="color:var(--text-mid);font-size:12px;margin-bottom:8px;line-height:1.7">Bu cihazda buluta henuz gitmemis kayitlar var. Buluttan yuklerseniz bu kayitlar <b style="color:var(--red)">silinir</b>.</p>'+
+      '<div class="modal-actions"><button class="btn btn-danger" onclick="closeModal();uniteYukle(AKTIF_UNITE,true)">Yine de Yukle</button><button class="btn btn-ghost" onclick="closeModal()">Iptal</button></div>');
+    return;
+  }
+  uniteYukle(AKTIF_UNITE, true);
 }
 function updateCloudDot(){
   var el=document.getElementById('cloudDot');
-  if(el) el.classList.toggle('on',cloudStatus==='connected');
+  if(!el) return;
+  el.classList.toggle('on',cloudStatus==='connected');
+  var p=!!(AKTIF_UNITE && isPending(AKTIF_UNITE));
+  el.classList.toggle('pending',p);
+  el.title=p?'Buluta gonderilmeyi bekleyen kayit var':'Bulut durumu';
 }
 
 // ─── SETUP ───
@@ -675,9 +752,10 @@ function doSetupImport(input){
   reader.onload=function(e){
     try{
       var parsed=JSON.parse(e.target.result);
-      if(!parsed.tags||!Array.isArray(parsed.tags)){
+      if(!parsed||!parsed.tags){
         if(statusEl){ statusEl.style.color='var(--red)'; statusEl.textContent='Gecersiz yedek dosyasi!'; } return;
       }
+      parsed.tags=sanitizeTags(parsed.tags);
       var tc=parsed.tags.length;
       var mc=parsed.tags.reduce(function(s,t){ return s+t.measurements.length; },0);
       DB=parsed; dbSave();
@@ -743,7 +821,7 @@ function initChart(tagName){
   var temps=tag.measurements.map(function(m){ return m.temp; });
   var yellows=temps.map(function(){ return tag.yellowLimit; });
   var reds=temps.map(function(){ return tag.redLimit; });
-  var hasAmbData=tag.trackAmbient&&tag.measurements.some(function(m){ return m.ambient!==null&&m.ambient!==undefined; });
+  var hasAmbData=tag.measurements.some(function(m){ return m.ambient!==null&&m.ambient!==undefined; });
   var datasets=[
     {label:'Motor',data:temps,borderColor:'#00d4ff',backgroundColor:'rgba(0,212,255,.07)',tension:.3,pointRadius:3,pointHoverRadius:5,fill:true,borderWidth:2},
     {label:'Sari Limit',data:yellows,borderColor:'#ffb800',borderDash:[6,4],pointRadius:0,borderWidth:1.5,backgroundColor:'transparent'},
@@ -1114,6 +1192,7 @@ function doAddTag(){
     var y=document.getElementById('newTagY')?document.getElementById('newTagY').value:'';
     var r=document.getElementById('newTagR')?document.getElementById('newTagR').value:'';
     if(!name){ showToast('Tag adi girin','error'); return; }
+    if(tagAdiHatasi(name)){ showToast(tagAdiHatasi(name),'error'); return; }
     if(parseFloat(y)>=parseFloat(r)){ showToast('Kirmizi > Sari olmali','error'); return; }
     var w=document.getElementById('newTagW')?document.getElementById('newTagW').value:'0';
     var amb=document.getElementById('newTagAmb')?document.getElementById('newTagAmb').value==='1':false;
@@ -1171,6 +1250,7 @@ function showRenameTag(tagName){
 }
 function doRenameTag(oldN){
   var newN=document.getElementById('renameTagIn').value.trim(); if(!newN) return;
+  if(tagAdiHatasi(newN)){ showToast(tagAdiHatasi(newN),'error'); return; }
   if(renameTag(oldN,newN)){ closeModal(); showToast('Ad guncellendi','success'); navigate('tag_detail',{tag:newN},false); }
   else showToast('Bu ad kullanımda','error');
 }
@@ -1204,7 +1284,8 @@ function renderRapor(ctx){
   var selTag=(ctx&&ctx.tag)||'all';
   var tagOpts='<option value="all"'+(selTag==='all'?' selected':'')+'>&#9646; Tum Unite ('+DB.unitName+')</option>';
   tagOpts+=DB.tags.map(function(t){ return '<option value="'+t.name+'"'+(t.name===selTag?' selected':'')+'>'+t.name+'</option>'; }).join('');
-  var preview=''; var today=new Date().toISOString().slice(0,10);
+  // Yerel tarih: toISOString UTC verdigi icin gece 00:00-03:00 arasi "dun" cikiyor ve bugunun olcumleri rapora girmiyordu
+  var _n=new Date(); var preview=''; var today=_n.getFullYear()+'-'+String(_n.getMonth()+1).padStart(2,'0')+'-'+String(_n.getDate()).padStart(2,'0');
   if(selTag==='all'){
     var totalMeas=DB.tags.reduce(function(s,t){ return s+t.measurements.length; },0);
     var tagRows=DB.tags.map(function(t){ var l=lastTemp(t); var st=l!==null?alarmStatus(l,t):'normal'; return '<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border)"><span style="font-family:var(--head);font-size:14px;font-weight:700;color:var(--text);flex:1">'+t.name+'</span><span style="font-size:10px;color:var(--text-dim)">'+t.measurements.length+' olcum</span>'+(l!==null?'&nbsp;<span class="badge badge-'+st+'">'+l+'&deg;</span>':'')+'</div>'; }).join('')||'<div style="font-size:11px;color:var(--text-dim);padding:8px 0">Tag yok</div>';
@@ -1263,12 +1344,13 @@ async function doExportExcel(){
     addTitle(ws,'TERMAL TAKIP  |  '+DB.unitName+'  |  '+date,8);
     var hRow=ws.addRow(['Tag','Toplam','3. Son Olcum','2. Son Olcum','Son Olcum','Sari Limit','Kirmizi Limit','Durum']);
     applyHeader(hRow);
-    DB.tags.forEach(function(t,i){ var last3=t.measurements.slice(-3).reverse(); var l=lastTemp(t); var st=l!==null?(l>=t.redLimit?'KIRMIZI':l>=t.yellowLimit?'SARI':'NORMAL'):'-'; function mc(m){ return m?m.temp+'°C  '+m.date:'-'; } var row=ws.addRow([t.name,t.measurements.length,mc(last3[2]),mc(last3[1]),mc(last3[0]),t.yellowLimit,t.redLimit,st]); applyData(row,i,8); row.getCell(1).font={bold:true}; });
+    // Secili tarih araligindaki olcumler kullanilir (eskiden aralik yok sayilip tum gecmis aliniyordu)
+    d.tags.forEach(function(dt,i){ var t=dt.tag; var ms=dt.ms; var last3=ms.slice(-3).reverse(); var l=ms.length?ms[ms.length-1].temp:null; var st=l!==null?(l>=t.redLimit?'KIRMIZI':l>=t.yellowLimit?'SARI':'NORMAL'):'-'; function mc(m){ return m?m.temp+'°C  '+m.date:'-'; } var row=ws.addRow([t.name,ms.length,mc(last3[2]),mc(last3[1]),mc(last3[0]),t.yellowLimit,t.redLimit,st]); applyData(row,i,8); row.getCell(1).font={bold:true}; });
     autoFit(ws);
     var buf=await wb.xlsx.writeBuffer();
     var blob=new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
     var a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=DB.unitName+'_'+date+'_ozet.xlsx';a.click();
-    showToast(DB.tags.length+' tag ozeti Excel olarak indirildi','success');
+    showToast(d.tags.length+' tag ozeti Excel olarak indirildi','success');
   } else {
     var ws2=wb.addWorksheet(d.tagName.slice(0,31));
     addTitle(ws2,'TERMAL TAKIP  |  '+DB.unitName+' / '+d.tagName+'  |  '+date,7);
@@ -1347,7 +1429,7 @@ async function doExportGrafikPDF(){
     var temps  = tag.measurements.map(function(m){ return m.temp; });
     var yellows = temps.map(function(){ return tag.yellowLimit; });
     var reds    = temps.map(function(){ return tag.redLimit; });
-    var hasAmb  = tag.trackAmbient && tag.measurements.some(function(m){ return m.ambient!==null&&m.ambient!==undefined; });
+    var hasAmb  = tag.measurements.some(function(m){ return m.ambient!==null&&m.ambient!==undefined; });
     var datasets = [
       {label:'Motor',data:temps,borderColor:'#00d4ff',backgroundColor:'rgba(0,212,255,0.1)',tension:0.3,pointRadius:3,fill:true,borderWidth:2},
       {label:'Sari',data:yellows,borderColor:'#ffb800',borderDash:[6,4],pointRadius:0,borderWidth:1.5,backgroundColor:'transparent'},
@@ -1510,8 +1592,12 @@ function addAnalysisCriteriaSection(doc, startY, maxWidth){
 // asOfIndex verilirse, sanki o andaki olcum "son olcum"mus gibi hesaplar (gecmis trend icin kullanilir). Verilmezse mevcut davranis aynen calisir.
 function calcDeltaTAnalysis(tag, asOfIndex){
   var upTo = (asOfIndex===undefined||asOfIndex===null) ? tag.measurements.length-1 : asOfIndex;
-  var ms = tag.measurements.slice(0, upTo+1).filter(function(m){ return m.ambient!==null && m.ambient!==undefined; });
-  if(ms.length < 1) return {status:'none'};
+  function hasAmb(m){ return m && m.ambient!==null && m.ambient!==undefined && !isNaN(m.ambient); }
+  var all = tag.measurements.slice(0, upTo+1);
+  // Degerlendirilen (son) olcumde ortam yoksa Delta T hesaplanmaz. Eskiden burada ortami olan
+  // en son ESKI olcum "simdiki" sayiliyordu; motor sonradan sogusa bile eski yukselis gosterilmeye devam ediyordu.
+  if(!hasAmb(all[all.length-1])) return {status:'none', missingLast: all.some(hasAmb)};
+  var ms = all.filter(hasAmb);
   var current = ms[ms.length-1];
   var currentDeltaT = parseFloat((current.temp - current.ambient).toFixed(1));
   if(ms.length < 2) return {status:'baseline', current:currentDeltaT, avg:null, diff:null};
@@ -1555,9 +1641,9 @@ function getHealthScoreHistory(tag, n){
 }
 function analysisComment(st, dt){
   var rising = dt.status==='rising';
-  if(st==='red'&&rising) return 'Sicaklik kritik esigi asti ve delta T de yukselis egiliminde — ortam sicakligindan bagimsiz bir isinma soz konusu. Acil kontrol ve rulman/yaglama incelemesi onerilir.';
-  if(st==='red') return 'Sicaklik kritik esigi asti. Acil kontrol onerilir.';
-  if(st==='yellow'&&rising) return 'Sicaklik uyari esigine girdi ve delta T de yukselis egiliminde — ortam sicakligindan bagimsiz bir isinma soz konusu. Rulman/yaglama kontrolu onerilir.';
+  if(st==='red'&&rising) return 'Sicaklik kritik esigi asti ve delta T de yukselis egiliminde — ortam sicakligindan bagimsiz bir isinma soz konusu. Sonraki olcumde de devam ederse motor degisim adayi olur; karar oncesi titresim analiziyle teyit onerilir.';
+  if(st==='red') return 'Sicaklik kritik esigi asti ancak delta T yukselisi yok — ortam/yuk kaynakli olabilir. Acil kontrol ve yakin takip onerilir.';
+  if(st==='yellow'&&rising) return 'Sicaklik uyari esigine girdi ve delta T de yukselis egiliminde — ortam sicakligindan bagimsiz bir isinma soz konusu. Degisim kriteri degil, yakin takip onerilir.';
   if(st==='yellow') return 'Sicaklik uyari esigine yaklasti, takip edilmesi onerilir.';
   if(rising) return 'Mutlak sicaklik normal araliktar ancak delta T yukselis egiliminde — erken bir isinma belirtisi olabilir, izlemeye devam edin.';
   if(dt.status==='baseline') return 'Sicaklik normal aralikta. Delta T icin referans (baseline) olusturuluyor, yeterli olcum biriktiginde trend degerlendirilecek.';
@@ -1577,7 +1663,7 @@ function showAnalysis(tagName){
 
   var dtBlock='';
   if(dt.status==='none'){
-    dtBlock='<div style="font-size:11px;color:var(--text-dim);margin-bottom:8px">Ortam sicakligi takibi bu tag icin kapali — Delta T hesaplanamadi.</div>';
+    dtBlock='<div style="font-size:11px;color:var(--text-dim);margin-bottom:8px">'+(dt.missingLast?'Son olcumde ortam sicakligi girilmemis — Delta T hesaplanamadi. Olcumu &#9998; ile duzenleyip ortam ekleyebilirsiniz.':'Bu tag icin ortam sicakligi verisi yok — Delta T hesaplanamadi.')+'</div>';
   } else if(dt.status==='baseline'){
     dtBlock='<div style="font-size:12px;margin-bottom:8px">&#128202; Delta T: <b>'+dt.current+'K</b> &nbsp; <span style="color:var(--text-dim)">(referans olusturuluyor)</span></div>';
   } else {
@@ -1872,7 +1958,7 @@ function renderYedek(){
 function showResetMeas(){
   var totalMeas=DB.tags.reduce(function(s,t){ return s+t.measurements.length; },0);
   showModal('<div class="modal-title" style="color:var(--red)">&#128465; Olcumleri Sifirla</div>'+
-    '<p style="color:var(--text-mid);font-size:12px;margin-bottom:12px;line-height:1.7">Toplam <b style="color:var(--red)">'+totalMeas+' olcum</b> silinecek.<br>Tag yapisi ve alarm limitleri korunacak.<br><span style="color:var(--red)">Bu islem geri alinamaz!</span></p>'+
+    '<p style="color:var(--text-mid);font-size:12px;margin-bottom:12px;line-height:1.7">Toplam <b style="color:var(--red)">'+totalMeas+' olcum</b> silinecek.<br>Tag yapisi ve alarm limitleri korunacak.<br>Olcumler <b>buluttan da</b> silinir.<br><span style="color:var(--red)">Bu islem geri alinamaz!</span></p>'+
     '<div class="form-group"><label class="form-label">Onaylamak icin <b>SIFIRLA</b> yazin</label><input type="text" class="form-input" id="resetConfirmInput" placeholder="SIFIRLA"></div>'+
     '<div class="modal-actions"><button class="btn btn-danger" onclick="doResetMeas()">Olcumleri Sifirla</button><button class="btn btn-ghost" onclick="closeModal()">Iptal</button></div>');
 }
@@ -1891,6 +1977,7 @@ function showResetAll(){
 function doResetAll(){
   var val=document.getElementById('resetAllInput')?document.getElementById('resetAllInput').value.trim():'';
   if(val!=='KOMPLE'){ showToast('"KOMPLE" yazmaniz gerekiyor','error'); return; }
+  clearTimeout(_syncTimer); if(AKTIF_UNITE) setPending(AKTIF_UNITE,false);
   localStorage.removeItem(getSK()); localStorage.removeItem('termal_son_unite');
   DB={unitName:'',tags:[]}; AKTIF_UNITE=null; closeModal();
   showToast('Uygulama sifirlandi','warn');
@@ -1939,11 +2026,14 @@ function doImport(input){
   reader.onload=function(e){
     try{
       var parsed=JSON.parse(e.target.result);
-      if(!parsed.tags||!Array.isArray(parsed.tags)){ showToast('Gecersiz dosya','error'); return; }
+      if(!parsed||!parsed.tags){ showToast('Gecersiz dosya','error'); return; }
+      parsed.tags=sanitizeTags(parsed.tags);
       var tc=parsed.tags.length; var mc=parsed.tags.reduce(function(s,t){ return s+t.measurements.length; },0);
+      var farkli=parsed.unitName&&DB.unitName&&parsed.unitName!==DB.unitName;
       var encoded=encodeURIComponent(JSON.stringify(parsed));
       showModal('<div class="modal-title">&#9888; Geri Yukleme Onayi</div>'+
-        '<p style="color:var(--text-mid);font-size:12px;margin-bottom:8px">Unite: <b>'+(parsed.unitName||'?')+'</b><br>'+tc+' tag, '+mc+' olcum yuklenecek.<br><span style="color:var(--red)">Mevcut veriler silinecek!</span></p>'+
+        '<p style="color:var(--text-mid);font-size:12px;margin-bottom:8px">Unite: <b>'+(parsed.unitName||'?')+'</b><br>'+tc+' tag, '+mc+' olcum yuklenecek.<br><span style="color:var(--red)">Mevcut veriler silinecek ve bulut da bu yedekle guncellenecek!</span>'+
+        (farkli?'<br><br><b style="color:var(--red)">DIKKAT: Yedek "'+parsed.unitName+'" unitesine ait, su an acik unite "'+DB.unitName+'". Yanlis unitenin uzerine yaziliyor olabilir.</b>':'')+'</p>'+
         '<div class="modal-actions"><button class="btn btn-danger" onclick="confirmImport(\''+encoded+'\')">Geri Yukle</button><button class="btn btn-ghost" onclick="closeModal()">Iptal</button></div>');
     } catch(e){ showToast('JSON parse hatasi','error'); }
   };
@@ -2032,7 +2122,8 @@ function qrKaydet(){
   var periyot=parseFloat(document.getElementById('qrPeriyot').value)||7;
   var ortam=parseFloat(document.getElementById('qrOrtam').value)||0;
   if(!ad){ showToast('Tag adi zorunlu','error'); return; }
-  addTag(ad,sari,kirmizi,periyot,true);
+  if(tagAdiHatasi(ad)){ showToast(tagAdiHatasi(ad),'error'); return; }
+  if(!addTag(ad,sari,kirmizi,periyot,true)){ showToast('Bu tag zaten var','error'); return; }
   var tag=getTag(ad); if(tag){ tag.ortamSicakligi=ortam; dbSave(); }
   closeModal(); navigate('tag_detail',{tag:ad}); showToast('Olusturuldu: '+ad,'success');
 }
