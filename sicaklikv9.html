@@ -1136,10 +1136,41 @@ function renderTagDetail(ctx){
     (tag.measurements.length?'<button class="btn btn-ghost btn-sm" onclick="showAnalysis(\''+tag.name+'\')" style="border-color:var(--accent);color:var(--accent)">&#128300; Analiz</button>':'')+
     '<button class="btn btn-danger btn-sm" onclick="confirmDeleteTag(\''+tag.name+'\')">&#128465; Sil</button>'+
     '</div></div>'+
-    motorSurucuOzet(tag)+chartSection+
+    dtYokUyari(tag)+motorSurucuOzet(tag)+chartSection+
     '<div class="section-div">Olcumler ('+tag.measurements.length+')</div>'+measHtml;
 }
 
+// Delta T analizi gorunmuyorsa NEDEN gorunmedigini acikca soyler (eskiden bolumler sessizce bos kaliyordu)
+function dtYokUyari(tag){
+  var ambSay=tag.measurements.filter(_ambOk).length;
+  if(ambSay>=2) return '';
+  var msg, btn='';
+  if(!tag.trackAmbient){
+    msg='Bu tagda <b>ortam sicakligi takibi kapali</b>. Kayit ekraninda ortam alani cikmadigi icin Delta T, degisim nedeni ve referans analizi yapilamiyor.';
+    btn='<button class="btn btn-primary btn-sm" style="margin-top:8px" onclick="ambTakibiAc(\''+tag.name+'\')">☀ Ortam Takibini Ac</button>';
+  } else if(ambSay===1){
+    msg='Delta T analizi icin ortam girilmis <b>en az 2 olcum</b> gerekli (su an 1). Bir sonraki olcumden itibaren analiz baslar.';
+  } else {
+    msg='Ortam takibi acik ama hicbir olcumde ortam girilmemis. Eski olcumlere &#9998; ile ortam ekleyebilirsiniz.';
+  }
+  return '<div style="background:rgba(255,184,0,.07);border:1px solid rgba(255,184,0,.25);border-radius:8px;padding:10px 12px;margin-bottom:10px;font-size:11px;color:var(--text-mid);line-height:1.6">&#9888; '+msg+(btn?'<div>'+btn+'</div>':'')+'</div>';
+}
+function ambTakibiAc(tagName){
+  var t=getTag(tagName); if(!t) return;
+  t.trackAmbient=true; dbSave(); showToast(tagName+': ortam takibi acildi','success');
+  navigate(currentPage,currentContext,false);
+}
+function ambKapaliUyari(){
+  var kapali=DB.tags.filter(function(t){ return !t.trackAmbient; });
+  if(!kapali.length) return '';
+  return '<div style="background:rgba(255,184,0,.07);border:1px solid rgba(255,184,0,.25);border-radius:8px;padding:10px 12px;margin-bottom:10px;font-size:11px;color:var(--text-mid);line-height:1.6">'+
+    '&#9888; <b>'+kapali.length+' / '+DB.tags.length+'</b> tagda ortam takibi kapali — bu taglarda Delta T analizi yapilamiyor.'+
+    '<div style="margin-top:8px"><button class="btn btn-primary btn-sm" onclick="tumAmbAc()">☀ Hepsinde Ac</button></div></div>';
+}
+function tumAmbAc(){
+  var n=0; DB.tags.forEach(function(t){ if(!t.trackAmbient){ t.trackAmbient=true; n++; } });
+  dbSave(); showToast(n+' tagda ortam takibi acildi','success'); navigate('tag_yonetim',{},false);
+}
 function motorSurucuOzet(tag){
   var m=tag.motor; var s=tag.surucu;
   if(!m&&!s) return '';
@@ -1227,10 +1258,12 @@ function renderTagYonetim(){
     '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px" class="form-group"><div><label class="form-label">Sari Limit &deg;C</label><input type="number" class="form-input" id="newTagY" value="75"></div><div><label class="form-label">Kirmizi Limit &deg;C</label><input type="number" class="form-input" id="newTagR" value="80"></div></div>'+
     '<div class="form-group"><label class="form-label">Olcum Periyodu (gun, 0 = devre disi)</label><input type="number" class="form-input" id="newTagW" value="0" min="0" max="365" placeholder="Ornek: 7"></div>'+
     '<div class="form-group"><label class="form-label">Ortam Sicakligi Takibi</label><div style="display:flex;gap:8px;margin-top:4px">'+
-    '<button type="button" id="newAmbOn" class="btn btn-sm btn-ghost" onclick="toggleNewAmb(true)">☀ Acik</button>'+
-    '<button type="button" id="newAmbOff" class="btn btn-sm btn-primary" onclick="toggleNewAmb(false)">Kapali</button></div></div>'+
-    '<input type="hidden" id="newTagAmb" value="0">'+
+    '<button type="button" id="newAmbOn" class="btn btn-sm btn-primary" onclick="toggleNewAmb(true)">☀ Acik</button>'+
+    '<button type="button" id="newAmbOff" class="btn btn-sm btn-ghost" onclick="toggleNewAmb(false)">Kapali</button></div>'+
+    '<div style="font-size:10px;color:var(--text-dim);margin-top:5px">Delta T ve degisim nedeni analizi icin acik olmali.</div></div>'+
+    '<input type="hidden" id="newTagAmb" value="1">'+
     '<button class="btn btn-primary btn-full" onclick="doAddTag()">+ Tag Ekle</button></div>'+
+    ambKapaliUyari()+
     '<div class="section-div">Mevcut Taglar</div>'+rows;
 }
 
