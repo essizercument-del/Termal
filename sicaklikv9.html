@@ -1525,7 +1525,7 @@ function pdfDurumRenk(data,col){
   if(data.section!=='body'||data.column.index!==col) return;
   var r=data.cell.raw;
   if(r==='KIRMIZI'||r==='KRITIK') data.cell.styles.textColor=[200,30,40];
-  else if(r==='SARI'||r==='UYARI') data.cell.styles.textColor=[160,110,0];
+  else if(r==='SARI'||r==='UYARI'||r==='DIKKAT') data.cell.styles.textColor=[160,110,0];
   else if(r==='NORMAL') data.cell.styles.textColor=[0,150,80];
 }
 function pdfNedenRenk(data,col,kodlar){
@@ -1688,7 +1688,8 @@ async function doExportGrafikPDF(){
       doc.text('Analiz', 14, ay); ay+=6;
       doc.setFont(undefined,'normal');
       doc.setFontSize(9); doc.setTextColor(stColor[0],stColor[1],stColor[2]);
-      doc.text('Durum: '+adata.stTxt+'   |   Saglik Skoru: '+adata.score+' / 100', 14, ay); ay+=6;
+      var gc=adata.genel.kod==='kritik'?[200,30,40]:adata.genel.kod==='dikkat'?[160,110,0]:[0,150,80]; doc.setTextColor(gc[0],gc[1],gc[2]);
+      doc.text('Genel Durum: '+adata.genel.txt+(adata.genel.nedenler.length?' ('+adata.genel.nedenler.join(', ')+')':'')+'   |   Sicaklik: '+adata.stTxt+'   |   Saglik Skoru: '+adata.score+' / 100', 14, ay); ay+=6;
       doc.setFontSize(8.5); doc.setTextColor(80);
       if(adata.dt.status==='rising'||adata.dt.status==='normal'){
         var dtLine = 'Delta T: '+refAciklama(adata.dt)+', simdi '+adata.dt.current+'K ('+_sgn(adata.dt.diff)+'K'+(adata.dt.status==='rising'?', yukselis':'')+')';
@@ -1741,9 +1742,11 @@ function getTagAnalysisData(tag){
   var stTxt=st==='red'?'KRITIK':st==='yellow'?'UYARI':'NORMAL';
   var dt=calcDeltaTAnalysis(tag);
   var score=calcHealthScore(tag);
-  var comment=analysisComment(st,dt);
+  var ard0=dtArdisikArtis(tag), sa0=sonDtAdim(tag);
+  var comment=analysisComment(st,dt,ard0,sa0);
+  var genel=genelDurum(tag,st,dt,ard0,sa0);
   var gapDays=daysBetweenLastTwo(tag);
-  return {tag:tag,tagName:tag.name,temp:l,ambient:last.ambient,st:st,stTxt:stTxt,dt:dt,score:score,comment:comment,gapDays:gapDays,ardisik:dtArdisikArtis(tag),sonAdim:sonDtAdim(tag),last:last};
+  return {tag:tag,tagName:tag.name,temp:l,ambient:last.ambient,st:st,stTxt:stTxt,dt:dt,score:score,comment:comment,gapDays:gapDays,ardisik:ard0,sonAdim:sa0,last:last,genel:genel};
 }
 
 // PDF'in altina eklenen, analizde kullanilan kriterleri aciklayan bolum.
@@ -1759,6 +1762,7 @@ function addAnalysisCriteriaSection(doc, startY, maxWidth){
     ['1) Mutlak Sicaklik','Son olcum, tag icin tanimli Sari/Kirmizi limitlerle karsilastirilir. Limit altindaysa Normal, Sari limiti gectiyse Uyari, Kirmizi limiti gectiyse Kritik.'],
     ['2) Delta T Yukselisi (Referansa Gore)','Delta T = Motor Sicakligi - Ortam Sicakligi (motorun ortamdan bagimsiz kendi isinmasi). Son olcumun Delta T degeri SABIT bir referansla karsilastirilir: referans, tagin ilk '+REF_OLCUM+' ortamli olcumunun Delta T ortalamasidir. Notuna "Motor degisti" veya "Yeni motor" yazilan olcumde ya da Tag Detay > Referans ile elle yenilendiginde referans o olcumden itibaren yeniden olusturulur. Referans olusurken yukselis gosteren olcum referansa alinmaz. Fark '+DT_YUKSELIS_ESIK+'K veya fazlaysa "yukselis" olarak isaretlenir; yukselmis deger referansa karismadigi icin motor o seviyede kaldikca isaret de devam eder.'],
     ['2b) Olcumler Arasi Delta T Degisimi ve Nedeni','Ortami olan her olcum bir oncekiyle karsilastirilir: motor farki, ortam farki ve Delta T farki (= motor farki - ortam farki). Delta T '+DT_ADIM_ESIK+'K veya daha fazla arttiysa neden motor kaynaklidir (motor isindi ortam dustu / ortam dustu motor sogumadi / ortam isindi motor daha fazla isindi / ortam sabit motor isindi). Motor isinip Delta T degismediyse artis ortam kaynaklidir. Ortam farki '+ORTAM_SABIT_ESIK+' C altindaysa ortam sabit sayilir. Delta T art arda 2 veya daha fazla olcum arttiysa uyari verilir. Bilgi amaclidir, skoru etkilemez.'],
+    ['Genel Durum','Sicaklik ve Delta T birlikte degerlendirilir. KRITIK: kirmizi limit, ya da Delta T referansa gore yukseliste ve art arda artiyor / sari limitte. DIKKAT: sari limit, Delta T referansa gore yukselis, Delta T art arda 2+ artis veya son olcumde motor kaynakli artis. NORMAL: hicbiri. Raporlardaki Durum sutunu bunu gosterir; Sicaklik durumu (Normal/Uyari/Kritik) ayrica yazilir.'],
     ['3) Saglik Skoru (0-100)','100 puandan baslar. Kirmizi durumda -50, Sari durumda -20 puan kirilir. Delta T yukselis egilimindeyse ayrica -40 puan kirilir. Bu ikisi disinda hicbir sey skoru etkilemez.'],
     ['4) Motor Degisim Kriteri','Bu motorlar yaglanamadigi icin bakim degil degisim gerekir. Kirmizi limit + Delta T yukselisi ust uste en az '+DEGISIM_ARDISIK+' olcumde gorulurse degisim adayi olur, karar oncesi titresim analiziyle teyit onerilir; tek olcum yetmez. Sari limit + Delta T yukselisi degisim degil, yakin takip konusudur. Rapor sayfasindaki "Degisim Raporu" ile alinir.'],
     ['Skora Dahil Olmayanlar','Olcumler arasi gecen gun sayisi (fabrika ortaminda duzensiz olcum araligi normal kabul edilir) ve sicaklik artis hizi (olcum araliklari tutarli olmadigindan) skoru etkilemez, sadece bilgi amaclidir.']
@@ -1960,15 +1964,49 @@ function getHealthScoreHistory(tag, n){
   }
   return out;
 }
-function analysisComment(st, dt){
+// ─── GENEL DURUM ───
+// Sicaklik limiti + Delta T sinyallerini tek bir durumda birlestirir (eskiden "Durum" sadece sicakliga bakiyordu;
+// Delta T yukselen bir tag hem "Dikkat Gerektiren" listesinde hem de "NORMAL" yaziyordu).
+//  KRITIK : Kirmizi limit  VEYA  Delta T referansa gore yukseliste ve (art arda artiyor ya da sari limitte)
+//  DIKKAT : Sari limit  VEYA  Delta T referansa gore yukseliste  VEYA  art arda 2+ artis  VEYA  son olcumde motor kaynakli artis
+//  NORMAL : hicbiri
+function genelDurum(tag, st, dt, ardisik, sonAdim){
+  ardisik = ardisik||0;
+  var rising = dt && dt.status==='rising';
+  var motorAdim = !!(sonAdim && sonAdim.neden.kod==='motor');
+  var n=[];
+  if(st==='red') n.push('Kirmizi limit');
+  else if(st==='yellow') n.push('Sari limit');
+  if(rising) n.push('Referansa gore +'+dt.diff+'K');
+  if(ardisik>=2) n.push('Art arda '+ardisik+' artis');
+  if(motorAdim && ardisik<2) n.push('Son olcumde motor kaynakli '+_sgn(sonAdim.dDT)+'K');
+  var kod;
+  if(st==='red' || (rising && (ardisik>=2 || st==='yellow'))) kod='kritik';
+  else if(st==='yellow' || rising || ardisik>=2 || motorAdim) kod='dikkat';
+  else kod='normal';
+  return {kod:kod, txt:kod==='kritik'?'KRITIK':kod==='dikkat'?'DIKKAT':'NORMAL', nedenler:n};
+}
+function genelRenk(kod){ return kod==='kritik'?'var(--red)':kod==='dikkat'?'var(--yellow)':'var(--green)'; }
+function genelSira(kod){ return kod==='kritik'?0:kod==='dikkat'?1:2; }
+
+// Yorum: sicaklik, referansa gore yukselis, art arda artis ve son olcum nedeni birlikte degerlendirilir.
+// (Eskiden sadece sicaklik + referansa bakiyordu; art arda artan bir tag icin "aksiyon gerekmiyor" yaziyordu.)
+function analysisComment(st, dt, ardisik, sonAdim){
+  ardisik = ardisik||0;
   var rising = dt.status==='rising';
-  if(st==='red'&&rising) return 'Sicaklik kritik esigi asti ve delta T de yukselis egiliminde — ortam sicakligindan bagimsiz bir isinma soz konusu. Sonraki olcumde de devam ederse motor degisim adayi olur; karar oncesi titresim analiziyle teyit onerilir.';
-  if(st==='red') return 'Sicaklik kritik esigi asti ancak delta T yukselisi yok — ortam/yuk kaynakli olabilir. Acil kontrol ve yakin takip onerilir.';
-  if(st==='yellow'&&rising) return 'Sicaklik uyari esigine girdi ve delta T de yukselis egiliminde — ortam sicakligindan bagimsiz bir isinma soz konusu. Degisim kriteri degil, yakin takip onerilir.';
-  if(st==='yellow') return 'Sicaklik uyari esigine yaklasti, takip edilmesi onerilir.';
-  if(rising) return 'Mutlak sicaklik normal aralikta ancak delta T yukselis egiliminde — erken bir isinma belirtisi olabilir, izlemeye devam edin.';
-  if(dt.status==='baseline') return 'Sicaklik normal aralikta. Delta T icin referans (baseline) olusturuluyor, yeterli olcum biriktiginde trend degerlendirilecek.';
-  return 'Sicaklik ve delta T normal aralikta, herhangi bir aksiyon gerekmiyor.';
+  var motorAdim = sonAdim && sonAdim.neden.kod==='motor';
+  var sPre = st==='red'?'Sicaklik kritik esigi asti':st==='yellow'?'Sicaklik uyari esiginde':'Sicaklik normal';
+  var adimTxt = sonAdim ? ' Son olcumde Delta T '+_sgn(sonAdim.dDT)+'K: '+sonAdim.neden.txt+'.' : '';
+  if(st==='red'&&rising) return sPre+' ve Delta T referansin '+dt.diff+'K uzerinde — ortamdan bagimsiz isinma var. Sonraki olcumde de devam ederse motor degisim adayi olur; karar oncesi titresim analiziyle teyit onerilir.'+adimTxt;
+  if(rising && ardisik>=2) return sPre+'; Delta T referansin '+dt.diff+'K uzerinde ve art arda '+ardisik+' olcumdur artiyor — motor kotulesiyor. Nedeni arastirin (yuk, sogutma, rulman), olcum sikligini artirin; titresim olcumu onerilir.'+adimTxt;
+  if(st==='yellow'&&rising) return sPre+' ve Delta T referansin '+dt.diff+'K uzerinde — ortamdan bagimsiz isinma var. Degisim kriteri degil; yakin takip ve titresim olcumu onerilir.'+adimTxt;
+  if(rising) return sPre+' ancak Delta T referansin '+dt.diff+'K uzerinde — erken isinma belirtisi. Sonraki olcumde takip edin; artmaya devam ederse nedeni arastirin.'+adimTxt;
+  if(ardisik>=2) return sPre+'; Delta T henuz referans esiginin altinda ama art arda '+ardisik+' olcumdur artiyor (motor kaynakli). '+(st==='red'?'Acil kontrol ve titresim olcumu onerilir.':st==='yellow'?'Yakin takip ve nedenin arastirilmasi onerilir.':'Nedeni arastirin, bir sonraki olcumde takip edin.')+adimTxt;
+  if(motorAdim) return sPre+', Delta T referans seviyesinde; ancak son olcumdeki '+_sgn(sonAdim.dDT)+'K artis motor kaynakli ('+sonAdim.neden.kisa.toLowerCase()+'). '+(st==='red'?'Acil kontrol onerilir.':st==='yellow'?'Yakin takip onerilir.':'Bir sonraki olcumde tekrarlanip tekrarlanmadigina bakin.');
+  if(st==='red') return sPre+', Delta T referans seviyesinde — ortam/yuk kaynakli olabilir. Acil kontrol ve yakin takip onerilir.'+adimTxt;
+  if(st==='yellow') return sPre+', Delta T referans seviyesinde (ortam/yuk kaynakli olabilir). Takip edilmesi onerilir.'+adimTxt;
+  if(dt.status==='baseline') return 'Sicaklik normal aralikta. Delta T icin referans olusturuluyor, yeterli olcum biriktiginde degerlendirilecek.';
+  return 'Sicaklik ve Delta T normal, herhangi bir aksiyon gerekmiyor.'+(sonAdim&&sonAdim.neden.kod==='ortam'?' Son olcumdeki degisim ortam kaynakli.':'');
 }
 function showAnalysis(tagName){
   var tag=getTag(tagName); if(!tag) return;
@@ -2018,13 +2056,14 @@ function showAnalysis(tagName){
     (last.ambient!==null&&last.ambient!==undefined?' &nbsp;|&nbsp; Ortam: <b>'+last.ambient+'&deg;C</b>':'')+
     '</div>'+
     '<div class="alarm-bar alarm-'+st+'" style="margin-bottom:10px"><span>'+stIcon+' Durum: '+stTxt+' ('+tag.yellowLimit+'-'+tag.redLimit+'&deg;C esik)</span></div>'+
+    (function(){ var g=genelDurum(tag,st,dt,ardisik,sonAdim); return '<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;padding:8px 10px;border:1px solid '+genelRenk(g.kod)+';border-radius:6px"><b style="color:'+genelRenk(g.kod)+';font-family:var(--head);font-size:16px;letter-spacing:1px">'+g.txt+'</b><span style="font-size:11px;color:var(--text-mid)">'+(g.nedenler.join(' &middot; ')||'Sicaklik ve Delta T normal')+'</span></div>'; })()+
     dtBlock+ardisikBlock+dtStepsHtml(tag,5)+gapBlock+
     '<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;background:var(--panel);border:1px solid var(--border);border-radius:6px;padding:10px 12px">'+
     '<div style="font-family:var(--head);font-size:26px;font-weight:800;color:'+scoreColor+'">'+score+'</div>'+
     '<div><div style="font-size:10px;color:var(--text-dim);letter-spacing:1px;text-transform:uppercase">Saglik Skoru</div><div style="font-size:9px;color:var(--text-dim)">/ 100</div></div>'+
     '</div>'+
     scoreChartBlock+
-    '<div style="font-size:12px;color:var(--text-mid);line-height:1.7;margin-bottom:4px"><b style="color:var(--text)">Yorum:</b> '+analysisComment(st,dt)+'</div>'+
+    '<div style="font-size:12px;color:var(--text-mid);line-height:1.7;margin-bottom:4px"><b style="color:var(--text)">Yorum:</b> '+analysisComment(st,dt,ardisik,sonAdim)+'</div>'+
     '<div class="modal-actions"><button class="btn btn-ghost" onclick="showAnalysisInfo()">&#8505; Nasil Hesaplaniyor?</button><button class="btn btn-primary" style="flex:1" onclick="closeModal()">Kapat</button></div>';
   showModal(html);
   if(scoreHistory.length>=2){
@@ -2060,6 +2099,8 @@ function showAnalysisInfo(){
     'Delta T = Motor Sicakligi - Ortam Sicakligi (motorun ortamdan bagimsiz kendi isinmasi). Son olcumun Delta T degeri SABIT bir referansla karsilastirilir: referans, tagin ilk '+REF_OLCUM+' ortamli olcumunun Delta T ortalamasidir. Notuna "Motor degisti" veya "Yeni motor" yazilan olcumde ya da Tag Detay > Referans ile elle yenilendiginde referans o olcumden itibaren yeniden olusturulur. Referans olusurken yukselis gosteren olcum referansa alinmaz. Fark '+DT_YUKSELIS_ESIK+'K veya fazlaysa "yukselis" olarak isaretlenir; yukselmis deger referansa karismadigi icin motor o seviyede kaldikca isaret de devam eder.<br><br>'+
     '<b style="color:var(--text)">2b) Olcumler Arasi Delta T Degisimi ve Nedeni</b><br>'+
     'Ortami olan her olcum bir oncekiyle karsilastirilir: motor farki, ortam farki ve Delta T farki (= motor farki &minus; ortam farki). Delta T '+DT_ADIM_ESIK+'K veya daha fazla arttiysa neden motor kaynaklidir (motor isindi ortam dustu / ortam dustu motor sogumadi / ortam isindi motor daha fazla isindi / ortam sabit motor isindi). Motor isinip Delta T degismediyse artis ortam kaynaklidir. Ortam farki '+ORTAM_SABIT_ESIK+'&deg;C altindaysa ortam sabit sayilir. Delta T art arda 2 veya daha fazla olcum arttiysa ana sayfada ve analizde uyari cikar. Bu bolum bilgi amaclidir, skoru etkilemez.<br><br>'+
+    '<b style="color:var(--text)">Genel Durum</b><br>'+
+    'Sicaklik ve Delta T birlikte degerlendirilir. <b style="color:var(--red)">KRITIK</b>: kirmizi limit, ya da Delta T referansa gore yukseliste ve art arda artiyor / sari limitte. <b style="color:var(--yellow)">DIKKAT</b>: sari limit, Delta T referansa gore yukselis, Delta T art arda 2+ artis veya son olcumde motor kaynakli artis. <b style="color:var(--green)">NORMAL</b>: hicbiri.<br><br>'+
     '<b style="color:var(--text)">3) Saglik Skoru (0-100)</b><br>'+
     '100 puandan baslar. Kirmizi durumda &minus;50, Sari durumda &minus;20 puan kirilir. Delta T yukselis egilimindeyse ayrica &minus;40 puan kirilir. Bu ikisi disinda hicbir sey skoru etkilemez.<br><br>'+
     '<b style="color:var(--text)">4) Motor Degisim Kriteri</b><br>'+
@@ -2283,10 +2324,10 @@ function doExportAnalizPDF(){
       doc.setFontSize(11); doc.setTextColor(40); doc.text('1. Durum Ozeti', 14, 31);
       var kod1=data.map(function(a){ return a.sonAdim?a.sonAdim.neden.kod:''; });
       doc.autoTable({startY:34, margin:{left:14,right:14},
-        head:[['Tag','Son Olcum','Motor','Ortam','Delta T','DT Degisim','Degisim Nedeni','Art Arda','Referansa Gore','Durum','Skor']],
+        head:[['Tag','Son Olcum','Motor','Ortam','Delta T','DT Degisim','Degisim Nedeni','Art Arda','Referansa Gore','Genel Durum','Skor']],
         body:data.map(function(a){
           var trend=a.dt.status==='rising'?'Yukselis (+'+a.dt.diff+'K / ref '+a.dt.avg+'K)':a.dt.status==='normal'?'Normal ('+_sgn(a.dt.diff)+'K / ref '+a.dt.avg+'K)':a.dt.status==='baseline'?'Referans olusuyor':'-';
-          return [a.tagName, a.last.date+' '+a.last.time, a.temp+'°C', fmtAmb(a.last), fmtDt(a.last), a.sonAdim?_sgn(a.sonAdim.dDT)+'K':'-', a.sonAdim?a.sonAdim.neden.kisa:'-', a.ardisik>=2?a.ardisik+'x':'-', trend, a.stTxt, String(a.score)];
+          return [a.tagName, a.last.date+' '+a.last.time, a.temp+'°C', fmtAmb(a.last), fmtDt(a.last), a.sonAdim?_sgn(a.sonAdim.dDT)+'K':'-', a.sonAdim?a.sonAdim.neden.kisa:'-', a.ardisik>=2?a.ardisik+'x':'-', trend, a.genel.txt, String(a.score)];
         }),
         styles:{fontSize:7.5,cellPadding:1.8}, headStyles:{fillColor:BLUE,textColor:255,fontSize:7.5},
         alternateRowStyles:{fillColor:[246,249,252]},
@@ -2313,14 +2354,14 @@ function doExportAnalizPDF(){
         didParseCell:function(c){ if(c.section==='body'&&c.column.index===8&&/Art arda/.test(c.cell.raw)) c.cell.styles.textColor=[200,30,40]; }
       });
       // 3) Sadece dikkat gerektiren taglar ve yorumlari
-      var dikkat=data.filter(function(a){ return a.st!=='normal'||a.dt.status==='rising'||a.ardisik>=2||(a.sonAdim&&a.sonAdim.neden.kod==='motor'); });
+      var dikkat=data.filter(function(a){ return a.genel.kod!=='normal'; }).sort(function(x,y){ return genelSira(x.genel.kod)-genelSira(y.genel.kod) || x.score-y.score; });
       y=doc.lastAutoTable.finalY+9; if(y>pageH-40){ doc.addPage(); y=16; }
       doc.setFontSize(11); doc.setTextColor(40); doc.text('3. Dikkat Gerektiren Taglar ('+dikkat.length+')', 14, y);
       if(dikkat.length){
         doc.autoTable({startY:y+3, margin:{left:14,right:14},
-          head:[['Tag','Durum','Son olcum degisimi','Yorum']],
-          body:dikkat.map(function(a){ return [a.tagName, a.stTxt, a.sonAdim?'Delta T '+_sgn(a.sonAdim.dDT)+'K (motor '+_sgn(a.sonAdim.dM)+', ortam '+_sgn(a.sonAdim.dA)+') — '+a.sonAdim.neden.txt:'-', a.comment]; }),
-          styles:{fontSize:7.5,cellPadding:2}, columnStyles:{0:{cellWidth:28},1:{cellWidth:18},2:{cellWidth:90}},
+          head:[['Tag','Durum','Neden','Son olcum degisimi','Yorum']],
+          body:dikkat.map(function(a){ return [a.tagName, a.genel.txt, a.genel.nedenler.join(' · '), a.sonAdim?'Delta T '+_sgn(a.sonAdim.dDT)+'K (motor '+_sgn(a.sonAdim.dM)+', ortam '+_sgn(a.sonAdim.dA)+') — '+a.sonAdim.neden.txt:'-', a.comment]; }),
+          styles:{fontSize:7.5,cellPadding:2}, columnStyles:{0:{cellWidth:26},1:{cellWidth:17,fontStyle:'bold'},2:{cellWidth:42},3:{cellWidth:70}},
           headStyles:{fillColor:[198,40,40],textColor:255,fontSize:7.5}, alternateRowStyles:{fillColor:[253,246,246]},
           didParseCell:function(c){ pdfDurumRenk(c,1); }
         });
@@ -2338,10 +2379,12 @@ function doExportAnalizPDF(){
       var mo=t.motor||{}, su=t.surucu||{};
       var mtxt=[mo.marka,mo.model,mo.guc?mo.guc+' kW':'',mo.devir?mo.devir+' rpm':''].filter(Boolean).join(' ');
       if(mtxt||su.var){ doc.text('Motor: '+(mtxt||'-')+(su.var?'   |   Surucu: '+[su.marka,su.model,su.guc?su.guc+' kW':''].filter(Boolean).join(' '):''), 14, yy); yy+=7; }
-      var sc=a.st==='red'?[200,30,40]:a.st==='yellow'?[160,110,0]:[0,150,80];
-      doc.setFillColor(244,248,251); doc.setDrawColor(213,222,229); doc.rect(14,yy,W2,22,'FD');
+      var sc=a.genel.kod==='kritik'?[200,30,40]:a.genel.kod==='dikkat'?[160,110,0]:[0,150,80];
+      var nedenSatir=a.genel.nedenler.length?1:0;
+      doc.setFillColor(244,248,251); doc.setDrawColor(213,222,229); doc.rect(14,yy,W2,22+nedenSatir*6,'FD');
       doc.setFontSize(10); doc.setTextColor(sc[0],sc[1],sc[2]); doc.setFont(undefined,'bold');
-      doc.text('Durum: '+a.stTxt+'      Saglik Skoru: '+a.score+' / 100', 18, yy+6); doc.setFont(undefined,'normal');
+      doc.text('Genel Durum: '+a.genel.txt+'      Sicaklik: '+a.stTxt+'      Saglik Skoru: '+a.score+' / 100', 18, yy+6); doc.setFont(undefined,'normal');
+      if(nedenSatir){ doc.setFontSize(8.5); doc.setTextColor(sc[0],sc[1],sc[2]); doc.text('Neden: '+a.genel.nedenler.join('  ·  '), 18, yy+12); yy+=6; }
       doc.setFontSize(9); doc.setTextColor(50);
       doc.text('Son olcum: '+a.last.date+' '+a.last.time+'   Motor: '+a.temp+'°C   Ortam: '+fmtAmb(a.last)+'   Delta T: '+fmtDt(a.last), 18, yy+12);
       var trendTxt=a.dt.status==='rising'||a.dt.status==='normal'?refAciklama(a.dt)+', simdi '+a.dt.current+'K ('+_sgn(a.dt.diff)+'K'+(a.dt.status==='rising'?', yukselis':'')+')':a.dt.status==='baseline'?'Delta T referansi olusturuluyor (ilk olcum)':(a.dt.missingLast?'Son olcumde ortam yok — Delta T hesaplanamadi':'Ortam verisi yok');
