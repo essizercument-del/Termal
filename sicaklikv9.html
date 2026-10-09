@@ -1130,6 +1130,7 @@ function renderTagDetail(ctx){
     '<button class="btn btn-ghost btn-sm" onclick="showEditTag(\''+tag.name+'\')">&#9998; Alarm</button>'+
     '<button class="btn btn-ghost btn-sm" onclick="showRenameTag(\''+tag.name+'\')">&#9998; Adlandir</button>'+
     '<button class="btn btn-ghost btn-sm" onclick="showTagInfo(\''+tag.name+'\')">&#128300; Bilgi</button>'+
+    '<button class="btn btn-ghost btn-sm" onclick="showRefYenile(\''+tag.name+'\')">&#10227; Referans</button>'+
     '<button class="btn btn-primary btn-sm" onclick="navigate(\'kayit\',{tag:\''+tag.name+'\'})">+ Olcum</button>'+
     '<button class="btn btn-ghost btn-sm" onclick="navigate(\'rapor\',{tag:\''+tag.name+'\'})">&#128202; Rapor</button>'+
     (tag.measurements.length?'<button class="btn btn-ghost btn-sm" onclick="showAnalysis(\''+tag.name+'\')" style="border-color:var(--accent);color:var(--accent)">&#128300; Analiz</button>':'')+
@@ -1657,7 +1658,7 @@ async function doExportGrafikPDF(){
       doc.text('Durum: '+adata.stTxt+'   |   Saglik Skoru: '+adata.score+' / 100', 14, ay); ay+=6;
       doc.setFontSize(8.5); doc.setTextColor(80);
       if(adata.dt.status==='rising'||adata.dt.status==='normal'){
-        var dtLine = 'Delta T Egilimi: onceki '+(adata.dt.windowSize||0)+' olcum ortalamasi '+adata.dt.avg+'K idi, simdi '+adata.dt.current+'K'+(adata.dt.status==='rising'?' (yukselis egilimi)':'');
+        var dtLine = 'Delta T: '+refAciklama(adata.dt)+', simdi '+adata.dt.current+'K ('+_sgn(adata.dt.diff)+'K'+(adata.dt.status==='rising'?', yukselis':'')+')';
         var dtLines = doc.splitTextToSize(dtLine, 182);
         doc.text(dtLines, 14, ay); ay += dtLines.length*3.8 + 2;
       } else if(adata.dt.status==='baseline'){
@@ -1723,7 +1724,7 @@ function addAnalysisCriteriaSection(doc, startY, maxWidth){
   doc.text('Analiz Kriterleri', 14, y); y+=6;
   var items=[
     ['1) Mutlak Sicaklik','Son olcum, tag icin tanimli Sari/Kirmizi limitlerle karsilastirilir. Limit altindaysa Normal, Sari limiti gectiyse Uyari, Kirmizi limiti gectiyse Kritik.'],
-    ['2) Delta T Egilimi','Delta T = Motor Sicakligi - Ortam Sicakligi (motorun ortamdan bagimsiz kendi isinmasi). Son olcumun Delta T degeri, onceki en fazla 5 olcumun (yeterli gecmis yoksa mevcut olcum sayisi kadarinin) Delta T ortalamasiyla karsilastirilir. Fark 5K veya daha fazlaysa "yukselis egilimi" olarak isaretlenir. Yeterli gecmis veri yoksa referans (baseline) olusturulur.'],
+    ['2) Delta T Yukselisi (Referansa Gore)','Delta T = Motor Sicakligi - Ortam Sicakligi (motorun ortamdan bagimsiz kendi isinmasi). Son olcumun Delta T degeri SABIT bir referansla karsilastirilir: referans, tagin ilk '+REF_OLCUM+' ortamli olcumunun Delta T ortalamasidir. Notuna "Motor degisti" veya "Yeni motor" yazilan olcumde ya da Tag Detay > Referans ile elle yenilendiginde referans o olcumden itibaren yeniden olusturulur. Referans olusurken yukselis gosteren olcum referansa alinmaz. Fark '+DT_YUKSELIS_ESIK+'K veya fazlaysa "yukselis" olarak isaretlenir; yukselmis deger referansa karismadigi icin motor o seviyede kaldikca isaret de devam eder.'],
     ['2b) Olcumler Arasi Delta T Degisimi ve Nedeni','Ortami olan her olcum bir oncekiyle karsilastirilir: motor farki, ortam farki ve Delta T farki (= motor farki - ortam farki). Delta T '+DT_ADIM_ESIK+'K veya daha fazla arttiysa neden motor kaynaklidir (motor isindi ortam dustu / ortam dustu motor sogumadi / ortam isindi motor daha fazla isindi / ortam sabit motor isindi). Motor isinip Delta T degismediyse artis ortam kaynaklidir. Ortam farki '+ORTAM_SABIT_ESIK+' C altindaysa ortam sabit sayilir. Delta T art arda 2 veya daha fazla olcum arttiysa uyari verilir. Bilgi amaclidir, skoru etkilemez.'],
     ['3) Saglik Skoru (0-100)','100 puandan baslar. Kirmizi durumda -50, Sari durumda -20 puan kirilir. Delta T yukselis egilimindeyse ayrica -40 puan kirilir. Bu ikisi disinda hicbir sey skoru etkilemez.'],
     ['4) Motor Degisim Kriteri','Bu motorlar yaglanamadigi icin bakim degil degisim gerekir. Kirmizi limit + Delta T yukselisi ust uste en az '+DEGISIM_ARDISIK+' olcumde gorulurse degisim adayi olur, karar oncesi titresim analiziyle teyit onerilir; tek olcum yetmez. Sari limit + Delta T yukselisi degisim degil, yakin takip konusudur. Rapor sayfasindaki "Degisim Raporu" ile alinir.'],
@@ -1742,23 +1743,76 @@ function addAnalysisCriteriaSection(doc, startY, maxWidth){
 }
 
 // ─── ANALİZ ───
-// asOfIndex verilirse, sanki o andaki olcum "son olcum"mus gibi hesaplar (gecmis trend icin kullanilir). Verilmezse mevcut davranis aynen calisir.
+// ─── DELTA T REFERANSI (BASELINE) ───
+// Yukselis, kayan ortalamaya gore degil SABIT bir referansa gore olculur. Kayan ortalamada yukselmis deger
+// birkac olcumde ortalamaya karisip kendini "normallestiriyordu" (20K -> 27K'de kalan motor tek olcum isaretleniyordu).
+// Referans = referans baslangicindan itibaren ilk REF_OLCUM ortamli olcumun Delta T ortalamasi.
+// Referans baslangici: tagin ilk olcumu, notunda "Motor degisti"/"Yeni motor" gecen en son olcum,
+// veya Tag Detay'daki "Referansi Yenile" ile secilen olcum — hangisi daha yeniyse.
+// Referans dolarken (ilk 5 olcum) yukselis gosteren olcum referansa ALINMAZ.
+var REF_OLCUM = 5;
+var DT_YUKSELIS_ESIK = 5; // K
+function measKey(m){ var d=parseTRDate(m.date); var hm=String(m.time||'0:0').split(':'); d.setHours(+hm[0]||0,+hm[1]||0,0,0); return d.getTime(); }
+function motorDegistiNotu(note){
+  if(!note) return false;
+  var n=String(note).toLocaleLowerCase('tr-TR');
+  return /motor\s*de[gğ][iı][sş]t[iı]|yeni\s*motor/.test(n);
+}
+// upTo indeksine kadar gecerli olan referans baslangic indeksi ve nedeni
+function refStartIndex(tag, upTo){
+  var notIdx=-1, manIdx=-1;
+  for(var i=0;i<=upTo;i++){
+    var m=tag.measurements[i];
+    if(motorDegistiNotu(m.note)) notIdx=i;                                   // en son motor degisimi notu
+    if(tag.dtRefFrom && manIdx<0 && measKey(m)>=tag.dtRefFrom) manIdx=i;      // elle yenilemenin ilk olcumu
+  }
+  // Hangisi daha yeni olcumdeyse o gecerli
+  if(notIdx<0 && manIdx<0) return {idx:0, neden:'ilk'};
+  return notIdx>=manIdx ? {idx:notIdx, neden:'motor'} : {idx:manIdx, neden:'manuel'};
+}
+// asOfIndex verilirse, sanki o andaki olcum "son olcum"mus gibi hesaplar (gecmis skor ve degisim raporu icin).
 function calcDeltaTAnalysis(tag, asOfIndex){
   var upTo = (asOfIndex===undefined||asOfIndex===null) ? tag.measurements.length-1 : asOfIndex;
-  function hasAmb(m){ return m && m.ambient!==null && m.ambient!==undefined && !isNaN(m.ambient); }
   var all = tag.measurements.slice(0, upTo+1);
-  // Degerlendirilen (son) olcumde ortam yoksa Delta T hesaplanmaz. Eskiden burada ortami olan
-  // en son ESKI olcum "simdiki" sayiliyordu; motor sonradan sogusa bile eski yukselis gosterilmeye devam ediyordu.
-  if(!hasAmb(all[all.length-1])) return {status:'none', missingLast: all.some(hasAmb)};
-  var ms = all.filter(hasAmb);
-  var current = ms[ms.length-1];
-  var currentDeltaT = parseFloat((current.temp - current.ambient).toFixed(1));
-  if(ms.length < 2) return {status:'baseline', current:currentDeltaT, avg:null, diff:null};
-  var windowArr = ms.slice(Math.max(0, ms.length-1-5), ms.length-1);
-  var avgDeltaT = windowArr.reduce(function(s,m){ return s+(m.temp-m.ambient); },0) / windowArr.length;
-  avgDeltaT = parseFloat(avgDeltaT.toFixed(1));
-  var diff = parseFloat((currentDeltaT - avgDeltaT).toFixed(1));
-  return {status: diff>=5?'rising':'normal', current:currentDeltaT, avg:avgDeltaT, diff:diff, windowSize:windowArr.length};
+  // Degerlendirilen (son) olcumde ortam yoksa Delta T hesaplanmaz.
+  if(!_ambOk(all[all.length-1])) return {status:'none', missingLast: all.some(_ambOk)};
+  var rs = refStartIndex(tag, upTo);
+  var base=[], cur=all[all.length-1];
+  var curDt=_r1(cur.temp-cur.ambient);
+  for(var i=rs.idx;i<upTo;i++){
+    var m=tag.measurements[i]; if(!_ambOk(m)) continue;
+    var dt=m.temp-m.ambient;
+    if(base.length>=REF_OLCUM) break;
+    if(base.length){ var av=base.reduce(function(s,x){ return s+x.dt; },0)/base.length; if(dt-av>=DT_YUKSELIS_ESIK) continue; }
+    base.push({m:m, dt:dt});
+  }
+  var info={current:curDt, refNeden:rs.neden, refFrom:tag.measurements[rs.idx]?tag.measurements[rs.idx].date:null};
+  if(!base.length) return Object.assign({status:'baseline', avg:null, diff:null, windowSize:0, refComplete:false}, info);
+  var avg=_r1(base.reduce(function(s,x){ return s+x.dt; },0)/base.length);
+  var diff=_r1(curDt-avg);
+  return Object.assign({status: diff>=DT_YUKSELIS_ESIK?'rising':'normal', avg:avg, diff:diff, windowSize:base.length, refComplete:base.length>=REF_OLCUM}, info);
+}
+// Ekranda/PDF'te referansi anlatan kisa metin
+function refAciklama(dt){
+  if(!dt||dt.avg===null||dt.avg===undefined) return '';
+  var kaynak=dt.refNeden==='motor'?'motor degisiminden beri':dt.refNeden==='manuel'?'elle yenilemeden beri':'ilk olcumlerden';
+  return 'Referans '+dt.avg+'K ('+kaynak+', '+dt.windowSize+' olcum'+(dt.refComplete?'':', referans dolmadi')+')';
+}
+function doRefYenile(tagName){
+  var t=getTag(tagName); if(!t||!t.measurements.length) return;
+  var son=t.measurements[t.measurements.length-1];
+  t.dtRefFrom=measKey(son); dbSave(); closeModal();
+  showToast('Referans '+son.date+' olcumunden itibaren yeniden olusturulacak','success');
+  navigate('tag_detail',{tag:tagName},false);
+}
+function showRefYenile(tagName){
+  var t=getTag(tagName); if(!t||!t.measurements.length){ showToast('Once olcum girin','warn'); return; }
+  var dt=calcDeltaTAnalysis(t), son=t.measurements[t.measurements.length-1];
+  showModal('<div class="modal-title">&#10227; Delta T Referansini Yenile</div>'+
+    '<p style="color:var(--text-mid);font-size:12px;line-height:1.7;margin-bottom:8px">Su anki: <b>'+(refAciklama(dt)||'referans yok')+'</b><br><br>'+
+    'Referans, son olcumden (<b>'+son.date+' '+son.time+'</b>) itibaren ilk '+REF_OLCUM+' ortamli olcumle yeniden olusturulur. '+
+    'Yukte kalici degisiklik, bakim gibi durumlarda kullanin. Motor degisiminde gerek yok: notuna "Motor degisti" ya da "Yeni motor" yazmaniz yeterli.</p>'+
+    '<div class="modal-actions"><button class="btn btn-primary" style="flex:1" onclick="doRefYenile(\''+tagName+'\')">Yenile</button><button class="btn btn-ghost" onclick="closeModal()">Iptal</button></div>');
 }
 function calcHealthScore(tag, asOfIndex){
   var idx = (asOfIndex===undefined||asOfIndex===null) ? tag.measurements.length-1 : asOfIndex;
@@ -1903,7 +1957,7 @@ function showAnalysis(tagName){
   } else {
     var arrow=dt.status==='rising'?'&#8593;':'&#8594;';
     var arrowColor=dt.status==='rising'?'var(--yellow)':'var(--text-mid)';
-    dtBlock='<div style="font-size:12px;margin-bottom:8px">&#128202; Delta T egilimi: son '+dt.windowSize+' olcum ortalamasi <b>'+dt.avg+'K</b> idi, simdi <b>'+dt.current+'K</b> — <span style="color:'+arrowColor+'">'+arrow+' '+(dt.diff>=0?'+':'')+dt.diff+'K'+(dt.status==='rising'?' (yukselis egilimi)':'')+'</span></div>';
+    dtBlock='<div style="font-size:12px;margin-bottom:8px">&#128202; '+refAciklama(dt)+', simdi <b>'+dt.current+'K</b> — <span style="color:'+arrowColor+'">'+arrow+' '+_sgn(dt.diff)+'K'+(dt.status==='rising'?' (yukselis)':'')+'</span></div>';
   }
 
   // Son olcum adimi + art arda artis
@@ -1969,8 +2023,8 @@ function showAnalysisInfo(){
     '<div style="font-size:12px;color:var(--text-mid);line-height:1.85">'+
     '<b style="color:var(--text)">1) Mutlak Sicaklik</b><br>'+
     'Son olcum, tag icin tanimli Sari/Kirmizi limitlerle karsilastirilir. Limit altindaysa Normal, Sari limiti gectiyse Uyari, Kirmizi limiti gectiyse Kritik.<br><br>'+
-    '<b style="color:var(--text)">2) Delta T Egilimi</b><br>'+
-    'Delta T = Motor Sicakligi &minus; Ortam Sicakligi. Bu, motorun mevsim/ortamdan bagimsiz kendi isinmasini gosterir. Son olcumun Delta T degeri, onceki en fazla 5 olcumun (yeterli gecmis yoksa mevcut olcum sayisi kadarinin) Delta T ortalamasiyla karsilastirilir. Fark 5K veya daha fazlaysa "yukselis egilimi" olarak isaretlenir — motor, ortam sabit olsa bile normalden fazla isiniyor demektir. Yeterli gecmis veri yoksa referans (baseline) olusturulur, henuz karsilastirma yapilmaz.<br><br>'+
+    '<b style="color:var(--text)">2) Delta T Yukselisi (Referansa Gore)</b><br>'+
+    'Delta T = Motor Sicakligi - Ortam Sicakligi (motorun ortamdan bagimsiz kendi isinmasi). Son olcumun Delta T degeri SABIT bir referansla karsilastirilir: referans, tagin ilk '+REF_OLCUM+' ortamli olcumunun Delta T ortalamasidir. Notuna "Motor degisti" veya "Yeni motor" yazilan olcumde ya da Tag Detay > Referans ile elle yenilendiginde referans o olcumden itibaren yeniden olusturulur. Referans olusurken yukselis gosteren olcum referansa alinmaz. Fark '+DT_YUKSELIS_ESIK+'K veya fazlaysa "yukselis" olarak isaretlenir; yukselmis deger referansa karismadigi icin motor o seviyede kaldikca isaret de devam eder.<br><br>'+
     '<b style="color:var(--text)">2b) Olcumler Arasi Delta T Degisimi ve Nedeni</b><br>'+
     'Ortami olan her olcum bir oncekiyle karsilastirilir: motor farki, ortam farki ve Delta T farki (= motor farki &minus; ortam farki). Delta T '+DT_ADIM_ESIK+'K veya daha fazla arttiysa neden motor kaynaklidir (motor isindi ortam dustu / ortam dustu motor sogumadi / ortam isindi motor daha fazla isindi / ortam sabit motor isindi). Motor isinip Delta T degismediyse artis ortam kaynaklidir. Ortam farki '+ORTAM_SABIT_ESIK+'&deg;C altindaysa ortam sabit sayilir. Delta T art arda 2 veya daha fazla olcum arttiysa ana sayfada ve analizde uyari cikar. Bu bolum bilgi amaclidir, skoru etkilemez.<br><br>'+
     '<b style="color:var(--text)">3) Saglik Skoru (0-100)</b><br>'+
@@ -2109,7 +2163,7 @@ function doExportDegisimPDF(){
     var bolumNo=0; function no(){ bolumNo++; return bolumNo+'. '; }
     heading(no()+'Degisim adayi (titresim teyidi onerilir)', RED);
     if(g.degisim.length){
-      table(['Tag','Son sicaklik','Limit (S/K)','Delta T (onceki ort. -> simdi)','Son degisim nedeni','Son olcumler','Skor'],
+      table(['Tag','Son sicaklik','Limit (S/K)','Delta T (referans -> simdi)','Son degisim nedeni','Son olcumler','Skor'],
         g.degisim.map(function(it){ return [it.tagName, it.temp+'°C', it.tag.yellowLimit+' / '+it.tag.redLimit+'°C', degisimDtText(it), sonNeden(it), it.recent.join(' / '), String(it.score)]; }), RED);
       para(TITRESIM_NOTU, 8.5, [60,60,60]);
     } else { para('Bu olcum turunda degisim adayi motor yok.', 9, [60,60,60]); }
@@ -2117,7 +2171,7 @@ function doExportDegisimPDF(){
     // 2. Teyit
     if(g.teyit.length){
       heading(no()+'Teyit bekleyen (kirmizi + Delta T yukselisi, '+DEGISIM_ARDISIK+' ardisik olcum gerekli)', AMB);
-      table(['Tag','Son sicaklik','Limit (S/K)','Delta T (onceki ort. -> simdi)','Son degisim nedeni','Ardisik','Son olcumler'],
+      table(['Tag','Son sicaklik','Limit (S/K)','Delta T (referans -> simdi)','Son degisim nedeni','Ardisik','Son olcumler'],
         g.teyit.map(function(it){ return [it.tagName, it.temp+'°C', it.tag.yellowLimit+' / '+it.tag.redLimit+'°C', degisimDtText(it), sonNeden(it), it.run+' / '+DEGISIM_ARDISIK, it.recent.join(' / ')]; }), AMB);
       para('Teyit tamamlanip degisim adayi olursa: '+TITRESIM_NOTU, 8.5, [60,60,60]);
     }
@@ -2125,14 +2179,14 @@ function doExportDegisimPDF(){
     // 3. Yakin takip
     if(g.takip.length){
       heading(no()+'Yakin takip (sari limit veya kirmizida Delta T yukselisi yok)', AMB);
-      table(['Tag','Son sicaklik','Limit (S/K)','Delta T (onceki ort. -> simdi)','Son degisim nedeni','Durum'],
+      table(['Tag','Son sicaklik','Limit (S/K)','Delta T (referans -> simdi)','Son degisim nedeni','Durum'],
         g.takip.map(function(it){ return [it.tagName, it.temp+'°C', it.tag.yellowLimit+' / '+it.tag.redLimit+'°C', degisimDtText(it), sonNeden(it), degisimNote(it)]; }), AMB);
     }
 
     // 4. Izleme
     if(g.izleme.length){
       heading(no()+'Izleme (sicaklik normal, Delta T yukseliyor)', BLUE);
-      table(['Tag','Son sicaklik','Limit (S/K)','Delta T (onceki ort. -> simdi)','Son degisim nedeni','Skor'],
+      table(['Tag','Son sicaklik','Limit (S/K)','Delta T (referans -> simdi)','Son degisim nedeni','Skor'],
         g.izleme.map(function(it){ return [it.tagName, it.temp+'°C', it.tag.yellowLimit+' / '+it.tag.redLimit+'°C', degisimDtText(it), sonNeden(it), String(it.score)]; }), BLUE);
     }
 
@@ -2140,7 +2194,7 @@ function doExportDegisimPDF(){
     heading('Kullanilan esikler', BLUE);
     table(['Parametre','Esik'], [
       ['Sari / Kirmizi limit','Her tag icin tanimli limitler (tablolarda S/K olarak gosterilir)'],
-      ['Delta T yukselisi','>= 5K (son olcum, onceki en fazla 5 olcumun ortalamasina gore)'],
+      ['Delta T yukselisi','>= '+DT_YUKSELIS_ESIK+'K (son olcum, sabit referansa gore: ilk '+REF_OLCUM+' olcum ya da motor degisimi / elle yenilemeden sonraki ilk '+REF_OLCUM+' olcum)'],
       ['Degisim adayi','Kirmizi limit + Delta T yukselisi, ust uste '+DEGISIM_ARDISIK+' olcum; titresim analiziyle teyit onerilir'],
       ['Teyit bekleyen','Son olcumde kirmizi + Delta T yukselisi, ardisik sayi yetersiz'],
       ['Yakin takip','Sari limitte veya kirmizida Delta T yukselisi yok (degisim degil)'],
@@ -2196,9 +2250,9 @@ function doExportAnalizPDF(){
       doc.setFontSize(11); doc.setTextColor(40); doc.text('1. Durum Ozeti', 14, 31);
       var kod1=data.map(function(a){ return a.sonAdim?a.sonAdim.neden.kod:''; });
       doc.autoTable({startY:34, margin:{left:14,right:14},
-        head:[['Tag','Son Olcum','Motor','Ortam','Delta T','DT Degisim','Degisim Nedeni','Art Arda','Delta T Egilimi (5 ort.)','Durum','Skor']],
+        head:[['Tag','Son Olcum','Motor','Ortam','Delta T','DT Degisim','Degisim Nedeni','Art Arda','Referansa Gore','Durum','Skor']],
         body:data.map(function(a){
-          var trend=a.dt.status==='rising'?'Yukselis (+'+a.dt.diff+'K)':a.dt.status==='normal'?'Normal ('+_sgn(a.dt.diff)+'K)':a.dt.status==='baseline'?'Referans':'-';
+          var trend=a.dt.status==='rising'?'Yukselis (+'+a.dt.diff+'K / ref '+a.dt.avg+'K)':a.dt.status==='normal'?'Normal ('+_sgn(a.dt.diff)+'K / ref '+a.dt.avg+'K)':a.dt.status==='baseline'?'Referans olusuyor':'-';
           return [a.tagName, a.last.date+' '+a.last.time, a.temp+'°C', fmtAmb(a.last), fmtDt(a.last), a.sonAdim?_sgn(a.sonAdim.dDT)+'K':'-', a.sonAdim?a.sonAdim.neden.kisa:'-', a.ardisik>=2?a.ardisik+'x':'-', trend, a.stTxt, String(a.score)];
         }),
         styles:{fontSize:7.5,cellPadding:1.8}, headStyles:{fillColor:BLUE,textColor:255,fontSize:7.5},
@@ -2257,7 +2311,7 @@ function doExportAnalizPDF(){
       doc.text('Durum: '+a.stTxt+'      Saglik Skoru: '+a.score+' / 100', 18, yy+6); doc.setFont(undefined,'normal');
       doc.setFontSize(9); doc.setTextColor(50);
       doc.text('Son olcum: '+a.last.date+' '+a.last.time+'   Motor: '+a.temp+'°C   Ortam: '+fmtAmb(a.last)+'   Delta T: '+fmtDt(a.last), 18, yy+12);
-      var trendTxt=a.dt.status==='rising'||a.dt.status==='normal'?'Delta T egilimi: onceki '+a.dt.windowSize+' olcum ort. '+a.dt.avg+'K, simdi '+a.dt.current+'K ('+_sgn(a.dt.diff)+'K'+(a.dt.status==='rising'?', yukselis':'')+')':a.dt.status==='baseline'?'Delta T: referans olusturuluyor':(a.dt.missingLast?'Son olcumde ortam yok — Delta T hesaplanamadi':'Ortam verisi yok');
+      var trendTxt=a.dt.status==='rising'||a.dt.status==='normal'?refAciklama(a.dt)+', simdi '+a.dt.current+'K ('+_sgn(a.dt.diff)+'K'+(a.dt.status==='rising'?', yukselis':'')+')':a.dt.status==='baseline'?'Delta T referansi olusturuluyor (ilk olcum)':(a.dt.missingLast?'Son olcumde ortam yok — Delta T hesaplanamadi':'Ortam verisi yok');
       doc.text(trendTxt, 18, yy+18); yy+=28;
       if(a.sonAdim){
         doc.setFontSize(9.5); doc.setTextColor(a.sonAdim.neden.kod==='motor'?200:60, a.sonAdim.neden.kod==='motor'?30:60, a.sonAdim.neden.kod==='motor'?40:60);
