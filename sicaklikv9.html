@@ -959,7 +959,7 @@ function renderKayit(ctx){
   if(tag) limitSection='<div class="form-group"><label class="form-label">Sicaklik Limitleri (&deg;C)</label><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><div><label class="form-label" style="font-size:10px">&#127937; Sari</label><input type="number" class="form-input" id="kayitYellow" value="'+tag.yellowLimit+'"></div><div><label class="form-label" style="font-size:10px">&#128308; Kirmizi</label><input type="number" class="form-input" id="kayitRed" value="'+tag.redLimit+'"></div></div></div>';
   return '<div class="card"><div class="card-head"><div class="dot"></div>Kayit &mdash; '+DB.unitName+'</div>'+
     '<div class="form-group"><label class="form-label">1 &mdash; Tag</label><div class="select-wrap"><select class="form-select" id="kayitTag" onchange="navigate(\'kayit\',{tag:this.value},false)">'+(tagOpts||'<option value="">-- Once tag ekleyin --</option>')+'</select></div>'+alarmInfo+'</div>'+
-    '<div class="form-group"><label class="form-label">2 &mdash; Motor Sicakligi (&deg;C)</label><input type="number" class="form-input temp-input" id="kayitTemp" placeholder="0" min="-40" max="300" inputmode="decimal"></div>'+
+    '<div class="form-group"><label class="form-label">2 &mdash; Motor Sicakligi (&deg;C)</label><input type="number" class="form-input temp-input" id="kayitTemp" placeholder="0" min="-40" max="300" inputmode="decimal">'+kameraButonu('kayitTemp')+'</div>'+
     ambientSection+limitSection+
     '<div class="form-group"><label class="form-label">Not</label><input type="text" class="form-input" id="kayitNote" placeholder="Not ekle..."><div class="note-chips">'+chips+'</div></div>'+
     mini+'<div style="margin-top:14px"><button class="btn btn-primary btn-full" onclick="doKaydet()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>KAYDET</button></div>'+
@@ -1066,7 +1066,7 @@ function showEditMeas(tagName,idx){
   // boylece o an atlanan/girilemeyen bir olcume sonradan ortam sicakligi eklenebilir.
   var ambRow='<div class="form-group"><label class="form-label">Ortam Sicakligi (&deg;C)</label><input type="number" class="form-input" id="editMeasAmb" value="'+(m.ambient!==null&&m.ambient!==undefined?m.ambient:'')+'" min="-40" max="80" inputmode="decimal" placeholder="Bos birakilabilir"></div>';
   showModal('<div class="modal-title">Olcumu Duzenle &mdash; '+m.date+' '+m.time+'</div>'+
-    '<div class="form-group"><label class="form-label">Motor Sicakligi (&deg;C)</label><input type="number" class="form-input" id="editMeasTemp" value="'+m.temp+'" min="-40" max="300" inputmode="decimal"></div>'+
+    '<div class="form-group"><label class="form-label">Motor Sicakligi (&deg;C)</label><input type="number" class="form-input" id="editMeasTemp" value="'+m.temp+'" min="-40" max="300" inputmode="decimal">'+kameraButonu('editMeasTemp',tagName)+'</div>'+
     ambRow+
     '<div class="form-group"><label class="form-label">Not</label><input type="text" class="form-input" id="editMeasNote" value="'+(m.note||'')+'"></div>'+
     '<div class="modal-actions"><button class="btn btn-primary" onclick="doEditMeas(\''+tagName+'\','+idx+')">Kaydet</button>'+
@@ -2619,6 +2619,26 @@ function bindEvents(page,ctx){
 // ─── CLOCK ───
 function tick(){ var el=document.getElementById('clockEl'); if(el) el.textContent=new Date().toLocaleTimeString('tr-TR',{hour:'2-digit',minute:'2-digit',second:'2-digit'}); }
 setInterval(tick,1000); tick();
+
+// ─── FLUKE TERMAL KAMERA (sadece Android "Termal Takip" uygulamasi icinde) ───
+// Uygulama, window.TermalKamera koprusunu ekler. Tarayicida buton hic gorunmez.
+function kameraButonu(hedefId,tagAdi){
+  if(!window.TermalKamera) return '';
+  var t=tagAdi?(',\''+String(tagAdi).replace(/'/g,"\\'")+'\''):'';
+  return '<button type="button" class="btn btn-primary btn-full" style="margin-top:8px;font-size:13px;padding:12px" onclick="kameradanOlc(\''+hedefId+'\''+t+')">&#128247; KAMERADAN OLC</button>';
+}
+function kameradanOlc(hedefId,tagAdi){
+  if(!window.TermalKamera){ showToast('Kamera sadece Android uygulamasinda calisir','error'); return; }
+  if(!tagAdi){ var ts=document.getElementById('kayitTag'); tagAdi=ts?ts.value:''; }
+  TermalKamera.olc(hedefId||'kayitTemp',tagAdi||'');
+}
+window.kameraSonuc=function(deger,hedefId){
+  var el=document.getElementById(hedefId||'kayitTemp');
+  if(!el){ showToast('Olcum alani bulunamadi ('+deger+'\u00b0C)','error'); return; }
+  el.value=deger;
+  try{ el.dispatchEvent(new Event('input',{bubbles:true})); }catch(e){}
+  showToast('Kameradan alindi: '+deger+'\u00b0C','success');
+};
 
 // ─── QR SCANNER ───
 var _qrStream=null,_qrInterval=null,_aktifQrKod='';
